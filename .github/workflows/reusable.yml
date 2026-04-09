@@ -67,16 +67,24 @@ jobs:
               "cxx": None,
               "cmd-sudo": None,
               "cmd-apt-envs": ["DEBIAN_FRONTEND=noninteractive", "TZ=Etc/UTC"],
+              "cmd-brew-envs": [],
+              "cmd-choco-envs": [],
+              "cmd-winget-envs": [],
+              "cmd-pip-envs": [],
               "cmd-apt-install": "apt-get install -y --no-install-recommends",
               "cmd-pip-install": "pip install",
               "cmd-brew-install": "brew install",
               "cmd-choco-install": "choco install -y",
+              "cmd-winget-install": "winget install --accept-source-agreements --accept-package-agreements",
               "apt-install-default": [],
-              "pip-install-default": [],
               "brew-install-default": [],
+              "choco-install-default": [],
+              "winget-install-default": [],
+              "pip-install-default": [],
               "apt-install": [],
               "brew-install": [],
               "choco-install": [],
+              "winget-install": [],
               "pip-install": [],
               "cmd-run-post-package": "",
               "enable-tests": False,
@@ -122,7 +130,7 @@ jobs:
               **_base,
               "runner": "windows-2025",
               "generator": "Visual Studio 17 2022",
-              "package-managers": ["choco", "pip"],
+              "package-managers": ["choco", "winget", "pip"],
               "pip-install-default": ["cmake"],
           }
 
@@ -184,11 +192,12 @@ jobs:
                           cmd = cfg.get(f"cmd-{pm}-install", "")
                           if not cmd:
                               print(f"::error::Matrix job '{job_name}': 'cmd-{pm}-install' is not defined but packages {install} are requested")
+                          elif pm == "winget":
+                              prefix = f"{envs} " if envs else ""
+                              install_cmds[f"cmd-install-{pm}"] = "; ".join(f"{prefix}{cmd} --id {pkg}" for pkg in install)
                           else:
-                              parts = [envs, cmd, *install]
-                              if pm == "apt" and sudo:
-                                  parts = [sudo, *parts]
-                              install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in parts if p)
+                              prefix = f"{sudo} {envs}" if pm == "apt" and sudo else envs
+                              install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in [prefix, cmd, *install] if p)
 
                   install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
 
@@ -368,6 +377,10 @@ jobs:
       - name: Install dependencies (choco)
         if: matrix.cmd-install-choco != ''
         run: ${{ matrix.cmd-install-choco }}
+
+      - name: Install dependencies (winget)
+        if: matrix.cmd-install-winget != ''
+        run: ${{ matrix.cmd-install-winget }}
 
       - name: Install dependencies (pip)
         if: matrix.cmd-install-pip != ''
