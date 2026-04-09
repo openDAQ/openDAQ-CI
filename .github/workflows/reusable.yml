@@ -78,6 +78,7 @@ jobs:
               "brew-install": [],
               "choco-install": [],
               "pip-install": [],
+              "cmd-run-post-package": "",
               "enable-tests": False,
               "gtest-artifact": "",
           }
@@ -159,7 +160,6 @@ jobs:
 
                   # collect user packages and run command for this job
                   user_pkgs = {}
-                  user_run = ""
                   for req in user_packages:
                       if not matches_any(job_name, req.get("match-jobs", ["*"])):
                           continue
@@ -171,7 +171,7 @@ jobs:
                               print(f"::warning::Matrix job '{job_name}': '{pm}' is not supported by this runner, skipping installation of {v}")
                               continue
                           user_pkgs.setdefault(k, []).extend(v)
-                      user_run = req.get("run", user_run)
+                      user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
 
                   # merge and build install commands per package manager
                   install_cmds = {}
@@ -189,6 +189,8 @@ jobs:
                               if pm == "apt" and sudo:
                                   parts = [sudo, *parts]
                               install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in parts if p)
+
+                  install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
 
                   # find test-preset for this job
                   test_preset = ""
@@ -211,7 +213,6 @@ jobs:
                       "build-type": build_type,
                       "enable-tests": enable_tests,
                       "gtest-artifact": gtest_artifact,
-                      "cmd-run-post-package": user_run,
                       **install_cmds,
                   })
 
@@ -276,6 +277,7 @@ jobs:
                       "configurePreset": name,
                       "inherits": [test_preset],
                       **({"configuration": build_type} if build_type else {}),
+                      "output": {"outputOnFailure": True},
                   })
 
           with open("CMakeUserPresets.json", "w") as f:
