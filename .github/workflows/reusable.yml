@@ -93,7 +93,7 @@ jobs:
               "generator": "Ninja",
               "cc": "gcc",
               "cxx": "g++",
-              "apt-install-default": ["mono-runtime", "libmono-system-json-microsoft4.0-cil", "libmono-system-data4.0-cil", "python3-pip"],
+              "apt-install-default": ["mono-runtime", "libmono-system-json-microsoft4.0-cil", "libmono-system-data4.0-cil", "python3-pip", "jq"],
               "pip-install-default": ["cmake", "ninja"],
           }
 
