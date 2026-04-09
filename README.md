@@ -1,2 +1,281 @@
 # openDAQ-CI
-Reusable CI workflows used across openDAQ main and module projects
+
+This repository contains reusable GitHub Actions CI workflows for openDAQ-based module projects.
+
+## Table of Contents
+
+- [Unified Reusable Workflow](#unified-reusable-workflow)
+  - [Inputs](#inputs)
+  - [Outputs](#outputs)
+  - [Overview](#overview)
+    - [Job Naming](#job-naming)
+    - [Target Platforms](#target-platforms)
+    - [Pipeline Configuration](#generate-stage)
+  - [Usage](#usage)
+    - [Basic](#basic)
+    - [Upstream Ref](#upstream-ref)
+    - [Exclude Jobs](#exclude-jobs)
+    - [Exclude Tests](#exclude-tests)
+    - [Rename Artifacts](#rename-artifacts)
+- [License](#license)
+
+## Unified Reusable Workflow
+
+[![Test Reusable CI](https://github.com/openDAQ/openDAQ-CI/actions/workflows/test-reusable.yml/badge.svg)](https://github.com/openDAQ/openDAQ-CI/actions/workflows/test-reusable.yml)
+
+The unified `reusable.yml` workflow is designed to provide a centralized approach to CI management and compatibility testing of openDAQ-based projects against upstream SDK. It dynamically configures CI pipelines from caller inputs — handling toolchain selection and environment setup — and orchestrates jobs across target platforms, architectures, and compilers.
+
+### Inputs
+
+```yaml
+- uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+  with:
+    # Override openDAQ SDK git reference.
+    # Format: tag, branch, or SHA
+    # Optional: '' - empty string, resolved by the caller
+    opendaq-ref: ''
+
+    # Exclude matrix jobs by name.
+    # Format: JSON array of strings
+    # Pattern: wildcard
+    # Optional: [] empty, no jobs excluded
+    # Example: '["*-debug", "macos-*"]'
+    exclude-jobs: ''
+
+    # Install additional packages per job.
+    # Format: JSON array of objects
+    # Fields:
+    #   match-jobs    — job names list (optional: ["*"] default)
+    #   apt-install   — apt packages (optional)
+    #   pip-install   — pip packages (optional)
+    #   brew-install  — brew packages (optional)
+    #   choco-install — choco packages (optional)
+    # Optional: [] empty, no extra packages
+    # Example: >
+    #   [
+    #     {
+    #       "match-jobs": ["ubuntu-*"],
+    #       "apt-install": ["libpcap-dev"],
+    #       "pip-install": ["pybind11"]
+    #     }
+    #   ]
+    packages: ''
+
+    # Map CMake presets to jobs.
+    # Format: JSON array of objects
+    # Fields:
+    #   match-jobs       — job names list (optional: ["*"] default)
+    #   configure-preset — configure preset name (mostly required)
+    #                      inherited, toolchains and build type are ignored
+    #   test-preset      — test preset name (optional)
+    #                      if omitted, tests will not run for matched jobs
+    # Optional: [] empty, no configuration inherited, no tests run
+    # Example: >
+    #   [
+    #     {
+    #       "configure-preset": "module",
+    #       "test-preset": "module-test"
+    #     }
+    #   ]
+    cmake-presets: ''
+
+    # Artifact names pattern, `*` is replaced with original name.
+    # Use to avoid conflicts when calling reusable.yml multiple times within the same workflow.
+    # Format: string with `*` placeholder
+    # Optional: '*' default
+    #           '' disables artifact upload
+    # Example: 'full-*'
+    upload-pattern: ''
+```
+
+### Outputs
+
+| Output | Description |
+|--------|-------------|
+| `matrix` | Generated jobs matrix content, JSON |
+| `cmake-user-presets` | Generated CMakeUserPresets.json content |
+
+### Overview
+
+#### Job Naming
+
+The workflow runs in two stages: **Generate** creates the jobs matrix and CMake user presets from caller inputs, then **CI** uses a matrix strategy to run each job on a dedicated runner within its own environment. Every CI job has a unique name that serves as a key — the caller uses it to request additional packages for the environment and to map CMake presets for building and testing the project. Job names follow this pattern:
+
+```txt
+<os>-<arch>-<generator>-<compiler>-<build_type>
+```
+
+The pattern components and their values are listed in the target platforms table:
+
+#### Target Platforms
+
+| os | arch | generator | compiler | build_type |
+|----|------|-----------|----------|------------|
+| ubuntu-20.04 | x86_64 | ninja | gcc-7, clang-9 | release, debug |
+| ubuntu-24.04 | x86_64 | ninja | gcc-14, clang-18 | release, debug |
+| macos-15 | armv8, x86_64 | ninja | appleclang | release, debug |
+| macos-26 | armv8, x86_64 | ninja | appleclang | release, debug |
+| windows-2025 | x86_64 | msvs | v143 | release, debug |
+
+Example: `ubuntu-24.04-x86_64-ninja-gcc-14-release`
+
+This naming approach allows the caller to flexibly configure which jobs to run or to set additional parameters for a specific job or a group of jobs using wildcard patterns. Moreover, using an array of patterns or full names enables targeting multiple jobs with a single argument.
+
+#### Pipeline Configuration
+
+The generate stage takes the full set of matrix jobs and processes them as follows:
+
+**Exclude filtering.** Each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix. If no patterns match, the job is created.
+
+**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution.
+
+**Preset mapping.** The `cmake-presets` array is iterated in the same way. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job.
+
+**Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2025-x86_64-msvs-v143-release` into `my-call (test-results-windows-2025-x86_64-msvs-v143-release)`.
+
+**CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. Output directories, build types, compilers, and generators are set in the generated presets to ensure consistent CMake invocations across the execution environment.
+
+### Usage
+
+#### Basic
+
+The recommended approach is to create minimal configure and test presets in your module's `CMakePresets.json`:
+
+```json
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "module",
+            "hidden": true,
+            "cacheVariables": {
+                "MY_MODULE_ENABLE_TESTS": "ON"
+            }
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "module-test",
+            "hidden": true,
+            "configurePreset": "module"
+        }
+    ]
+}
+```
+
+Then call the workflow without specifying `match-jobs`, implying the presets apply to all configurations:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+#### Upstream Ref
+
+To build against a specific openDAQ SDK git ref:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      opendaq-ref: 'main'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+#### Exclude Jobs
+
+To exclude all debug jobs and all macOS ARM jobs:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      exclude-jobs: '["*-debug", "macos-*-armv8-*"]'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+#### Exclude Tests
+
+To enable tests for all jobs but skip them on macOS. The first entry implicitly applies `configure-preset` to all jobs, while the second explicitly clears `test-preset` for macOS, so tests will not run on those jobs:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          },
+          {
+            "match-jobs": ["macos-*"],
+            "test-preset": ""
+          }
+        ]
+```
+
+#### Rename Artifacts
+
+To call the reusable workflow multiple times within the same workflow, use `upload-pattern` to avoid artifact name collisions:
+
+```yaml
+jobs:
+  ci-unit:
+    name: Unit Tests
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      upload-pattern: 'unit-*'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-unit-test"
+          }
+        ]
+
+  ci-integration:
+    name: Integration Tests
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      upload-pattern: 'integration-*'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-integration-test"
+          }
+        ]
+```
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
