@@ -291,14 +291,20 @@ jobs:
           {
             echo "<details><summary>${overall} Generate job inputs</summary>"
             echo ""
-            echo '```yaml'
-            echo "on:"
-            echo "  workflow_call:"
-            echo "    inputs:"
-            echo "      opendaq-ref: ${{ inputs.opendaq-ref || '\"\"' }}"
-            echo "      exclude-jobs: '${{ inputs.exclude-jobs || '[]' }}'"
-            echo "      packages: '${{ inputs.packages || '[]' }}'"
-            echo "      cmake-presets: '${{ inputs.cmake-presets || '[]' }}'"
+            echo '```json'
+            jq -n \
+              --arg ref "${{ inputs.opendaq-ref }}" \
+              --argjson exclude '${{ inputs.exclude-jobs || '[]' }}' \
+              --argjson packages '${{ inputs.packages || '[]' }}' \
+              --argjson presets '${{ inputs.cmake-presets || '[]' }}' \
+              --arg upload "${{ inputs.upload-pattern }}" \
+              '{
+                "opendaq-ref": $ref,
+                "exclude-jobs": $exclude,
+                "packages": $packages,
+                "cmake-presets": $presets,
+                "upload-pattern": $upload
+              }'
             echo '```'
             echo ""
             echo "</details>"
