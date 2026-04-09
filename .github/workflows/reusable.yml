@@ -157,12 +157,13 @@ jobs:
 
                   supported_pms = set(cfg.get("package-managers", []))
 
-                  # collect user packages for this job
+                  # collect user packages and run command for this job
                   user_pkgs = {}
+                  user_run = ""
                   for req in user_packages:
                       if not matches_any(job_name, req.get("match-jobs", ["*"])):
                           continue
-                      
+
                       user_install = {k: v for k, v in req.items() if k.endswith("-install") and v}
                       for k, v in user_install.items():
                           pm = k.removesuffix("-install")
@@ -170,6 +171,7 @@ jobs:
                               print(f"::warning::Matrix job '{job_name}': '{pm}' is not supported by this runner, skipping installation of {v}")
                               continue
                           user_pkgs.setdefault(k, []).extend(v)
+                      user_run = req.get("run", user_run)
 
                   # merge and build install commands per package manager
                   install_cmds = {}
@@ -209,6 +211,7 @@ jobs:
                       "build-type": build_type,
                       "enable-tests": enable_tests,
                       "gtest-artifact": gtest_artifact,
+                      "cmd-run-post-package": user_run,
                       **install_cmds,
                   })
 
@@ -367,6 +370,10 @@ jobs:
       - name: Install dependencies (pip)
         if: matrix.cmd-install-pip != ''
         run: ${{ matrix.cmd-install-pip }}
+
+      - name: Run post-package
+        if: matrix.cmd-run-post-package != ''
+        run: ${{ matrix.cmd-run-post-package }}
 
       - name: Write CI presets
         shell: bash
