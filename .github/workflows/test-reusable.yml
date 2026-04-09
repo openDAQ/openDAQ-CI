@@ -1,0 +1,41 @@
+name: Test Reusable CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-full:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      cmake-presets: '[{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
+
+  test-exclude:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      cmake-presets: '[{"match-jobs": ["*"], "configure-preset": "module-no-tests"}]'
+      exclude-jobs: '["*-debug", "macos-*", "windows-*", "ubuntu-20.04-*", "ubuntu-24.04-*-clang-*"]'
+
+  verify-full:
+    needs: [test-full]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/verify-reusable
+        with:
+          matrix: ${{ needs.test-full.outputs.matrix }}
+          cmake-user-presets: ${{ needs.test-full.outputs.cmake-user-presets }}
+          configure-preset: module
+          expect-test-presets: 'true'
+
+  verify-exclude:
+    needs: [test-exclude]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/verify-reusable
+        with:
+          matrix: ${{ needs.test-exclude.outputs.matrix }}
+          cmake-user-presets: ${{ needs.test-exclude.outputs.cmake-user-presets }}
+          exclude-patterns: '["*-debug", "macos-*", "windows-*", "ubuntu-20.04-*", "ubuntu-24.04-*-clang-*"]'
+          configure-preset: module-no-tests

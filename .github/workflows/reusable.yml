@@ -19,6 +19,13 @@ on:
         description: 'JSON array of preset configs, e.g. [{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
         type: string
         default: '[]'
+    outputs:
+      matrix:
+        description: "Generated build matrix JSON"
+        value: ${{ jobs.generate.outputs.matrix }}
+      cmake-user-presets:
+        description: "Generated CMakeUserPresets.json content"
+        value: ${{ jobs.generate.outputs.cmake-user-presets }}
 
 jobs:
   generate:
@@ -26,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      cmake-user-presets: ${{ steps.presets.outputs.cmake-user-presets }}
     steps:
       - name: Generate matrix
         id: matrix
@@ -194,7 +202,7 @@ jobs:
         id: presets
         shell: python3 {0}
         run: |
-          import json
+          import json, os
           from fnmatch import fnmatch
 
           cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
@@ -250,6 +258,9 @@ jobs:
 
           with open("CMakeUserPresets.json", "w") as f:
               json.dump(user_presets, f, indent=2)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"cmake-user-presets={json.dumps(user_presets)}\n")
 
       - name: Upload presets
         uses: actions/upload-artifact@v7
