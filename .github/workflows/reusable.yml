@@ -19,6 +19,10 @@ on:
         description: 'JSON array of preset configs, e.g. [{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
         type: string
         default: '[]'
+      upload-pattern:
+        description: "Pattern for artifact names, * is replaced with the original name, e.g. 'full-*'"
+        type: string
+        default: '*'
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -44,6 +48,8 @@ jobs:
 
           exclude_jobs = json.loads("""${{ inputs.exclude-jobs }}""")
           user_packages = json.loads("""${{ inputs.packages }}""")
+          cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
+          upload_pattern = """${{ inputs.upload-pattern }}"""
 
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
           print(f"Input: packages = {json.dumps(user_packages) if user_packages else 'None'}")
@@ -72,6 +78,8 @@ jobs:
               "brew-install": [],
               "choco-install": [],
               "pip-install": [],
+              "enable-tests": False,
+              "gtest-artifact": "",
           }
 
           # --- Ubuntu configs ---
@@ -180,6 +188,15 @@ jobs:
                                   parts = [sudo, *parts]
                               install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in parts if p)
 
+                  # find test-preset for this job
+                  test_preset = ""
+                  for req in cmake_presets:
+                      if matches_any(job_name, req.get("match-jobs", ["*"])):
+                          test_preset = req.get("test-preset", test_preset)
+
+                  enable_tests = bool(test_preset)
+                  gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
+
                   matrix.append({
                       "name": job_name,
                       "runner": cfg["runner"],
@@ -190,6 +207,8 @@ jobs:
                       "cc": cfg.get("cc") or "",
                       "cxx": cfg.get("cxx") or "",
                       "build-type": build_type,
+                      "enable-tests": enable_tests,
+                      "gtest-artifact": gtest_artifact,
                       **install_cmds,
                   })
 
@@ -261,13 +280,6 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"cmake-user-presets={json.dumps(user_presets)}\n")
-
-      - name: Upload presets
-        uses: actions/upload-artifact@v7
-        with:
-          name: CMakeUserPresets
-          path: CMakeUserPresets.json
-          retention-days: 7
 
       - name: Job summary
         if: always()
@@ -350,10 +362,9 @@ jobs:
         if: matrix.cmd-install-pip != ''
         run: ${{ matrix.cmd-install-pip }}
 
-      - name: Download CI presets
-        uses: actions/download-artifact@v8
-        with:
-          name: CMakeUserPresets
+      - name: Write CI presets
+        shell: bash
+        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' > CMakeUserPresets.json
 
       - name: Detect tests
         id: detect-tests
@@ -373,7 +384,7 @@ jobs:
 
       - name: Setup GTest
         id: setup-gtest
-        if: steps.detect-tests.outputs.preset != ''
+        if: matrix.enable-tests
         shell: python3 {0}
         run: |
           import os
@@ -384,16 +395,16 @@ jobs:
 
       - name: Test
         id: test
-        if: steps.detect-tests.outputs.preset != ''
+        if: matrix.enable-tests
         env:
           GTEST_OUTPUT: xml:${{ steps.setup-gtest.outputs.test-results-dir }}
         run: ctest --preset ${{ steps.detect-tests.outputs.preset }}
 
       - name: Upload test results
-        if: ${{ !cancelled() && steps.detect-tests.outputs.preset != '' }}
+        if: ${{ !cancelled() && matrix.enable-tests && matrix.gtest-artifact != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-${{ matrix.name }}
+          name: ${{ matrix.gtest-artifact }}
           path: ${{ steps.setup-gtest.outputs.test-results-dir }}
           retention-days: 7
 
@@ -407,9 +418,17 @@ jobs:
           {
             echo "<details><summary>${overall} ${{ matrix.name }}</summary>"
             echo ""
+            echo "<details><summary>CMakeUserPresets.json</summary>"
+            echo ""
             echo '```bash'
-            echo "# Download preset (see Generate job summary CMakeUserPresets.json section, if expired):"
-            echo "gh run download ${{ github.run_id }} -n CMakeUserPresets -D ."
+            echo "cat > CMakeUserPresets.json <<'EOF'"
+            cat CMakeUserPresets.json 2>/dev/null
+            echo "EOF"
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo '```bash'
             if [ -n "${{ inputs.opendaq-ref }}" ]; then
               echo ""
               echo "# Override openDAQ ref:"
