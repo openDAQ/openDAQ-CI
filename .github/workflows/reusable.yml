@@ -409,14 +409,12 @@ jobs:
           retention-days: 7
 
       - name: Job summary
-        if: always()
+        if: failure()
         shell: bash
         run: |
           s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
-          overall="✅"
-          [[ "${{ steps.configure.outcome }}" == "failure" || "${{ steps.build.outcome }}" == "failure" || "${{ steps.test.outcome }}" == "failure" ]] && overall="❌"
           {
-            echo "<details><summary>${overall} ${{ matrix.name }}</summary>"
+            echo "<details><summary>❌ ${{ matrix.name }}</summary>"
             echo ""
             echo "<details><summary>CMakeUserPresets.json</summary>"
             echo ""
