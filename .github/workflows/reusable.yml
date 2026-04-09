@@ -370,15 +370,7 @@ jobs:
 
       - name: Write CI presets
         shell: bash
-        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' | jq . > CMakeUserPresets.json
-
-      - name: Detect tests
-        id: detect-tests
-        shell: bash
-        run: |
-          if ctest --list-presets 2>/dev/null | grep -q '"${{ matrix.name }}"'; then
-            echo "preset=${{ matrix.name }}" >> $GITHUB_OUTPUT
-          fi
+        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' > CMakeUserPresets.json
 
       - name: Configure
         id: configure
@@ -404,7 +396,7 @@ jobs:
         if: matrix.enable-tests
         env:
           GTEST_OUTPUT: xml:${{ steps.setup-gtest.outputs.test-results-dir }}
-        run: ctest --preset ${{ steps.detect-tests.outputs.preset }}
+        run: ctest --preset ${{ matrix.name }}
 
       - name: Upload test results
         if: ${{ !cancelled() && matrix.enable-tests && matrix.gtest-artifact != '' }}
