@@ -370,7 +370,7 @@ jobs:
 
       - name: Write CI presets
         shell: bash
-        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' > CMakeUserPresets.json
+        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' | jq . > CMakeUserPresets.json
 
       - name: Detect tests
         id: detect-tests
@@ -426,7 +426,7 @@ jobs:
             echo ""
             echo '```bash'
             echo "cat > CMakeUserPresets.json <<'EOF'"
-            cat CMakeUserPresets.json 2>/dev/null
+            jq . CMakeUserPresets.json 2>/dev/null
             echo "EOF"
             echo '```'
             echo ""
