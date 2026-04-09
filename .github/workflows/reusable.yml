@@ -413,6 +413,7 @@ jobs:
         with:
           name: ${{ matrix.gtest-artifact }}
           path: ${{ steps.setup-gtest.outputs.test-results-dir }}
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Job summary
