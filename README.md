@@ -9,13 +9,16 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
   - [Outputs](#outputs)
   - [Overview](#overview)
     - [Job Naming](#job-naming)
-    - [Target Platforms](#target-platforms)
-    - [Pipeline Configuration](#generate-stage)
+      - [Platform Naming](#platform-naming)
+    - [Pipeline Configuration](#pipeline-configuration)
+    - [Job Execution](#job-execution)
   - [Usage](#usage)
     - [Basic](#basic)
     - [Upstream Ref](#upstream-ref)
     - [Exclude Jobs](#exclude-jobs)
     - [Exclude Tests](#exclude-tests)
+    - [Additional Packages](#additional-packages)
+    - [Post-Package Command](#post-package-command)
     - [Rename Artifacts](#rename-artifacts)
 - [License](#license)
 
@@ -45,18 +48,29 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     # Install additional packages per job.
     # Format: JSON array of objects
     # Fields:
-    #   match-jobs    — job names list (optional: ["*"] default)
-    #   apt-install   — apt packages (optional)
-    #   pip-install   — pip packages (optional)
-    #   brew-install  — brew packages (optional)
-    #   choco-install — choco packages (optional)
+    #   match-jobs     — job names list (optional: ["*"] default)
+    #   apt-install    — apt packages (optional, collect)
+    #   pip-install    — pip packages (optional, collect)
+    #   brew-install   — brew packages (optional, collect)
+    #   choco-install  — choco packages (optional, collect)
+    #   winget-install — winget packages (optional, collect)
+    #   run            — run after packages setup (optional, last match wins)
     # Optional: [] empty, no extra packages
     # Example: >
     #   [
     #     {
     #       "match-jobs": ["ubuntu-*"],
-    #       "apt-install": ["libpcap-dev"],
-    #       "pip-install": ["pybind11"]
+    #       "apt-install": ["libpcap-dev", "mosquitto"],
+    #       "run": "mosquitto -d"
+    #     },
+    #     {
+    #       "match-jobs": ["windows-*"],
+    #       "winget-install": ["EclipseFoundation.Mosquitto"]
+    #     },
+    #     {
+    #       "match-jobs": ["macos-*"],
+    #       "brew-install": ["mosquitto"],
+    #       "run": "$(brew --prefix mosquitto)/sbin/mosquitto -d"
     #     }
     #   ]
     packages: ''
@@ -97,17 +111,22 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
 
 ### Overview
 
+The workflow runs in two stages:
+
+- **Generate** — configures the pipeline: creates the jobs matrix and CMake user presets from caller inputs
+- **CI** — uses a matrix strategy to run each job on a dedicated runner within its own environment
+
 #### Job Naming
 
-The workflow runs in two stages: **Generate** creates the jobs matrix and CMake user presets from caller inputs, then **CI** uses a matrix strategy to run each job on a dedicated runner within its own environment. Every CI job has a unique name that serves as a key — the caller uses it to request additional packages for the environment and to map CMake presets for building and testing the project. Job names follow this pattern:
+Every CI job has a unique name that serves as a key — the caller uses it to request additional packages for the environment and to map CMake presets for building and testing the project. Job names follow this pattern:
 
 ```txt
 <os>-<arch>-<generator>-<compiler>-<build_type>
 ```
 
-The pattern components and their values are listed in the target platforms table:
+The pattern components and their values are listed in the platform naming table:
 
-#### Target Platforms
+##### Platform Naming
 
 | os | arch | generator | compiler | build_type |
 |----|------|-----------|----------|------------|
@@ -127,13 +146,52 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Exclude filtering.** Each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix. If no patterns match, the job is created.
 
-**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution.
+**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository.
 
 **Preset mapping.** The `cmake-presets` array is iterated in the same way. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job.
 
 **Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2025-x86_64-msvs-v143-release` into `my-call (test-results-windows-2025-x86_64-msvs-v143-release)`.
 
-**CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. Output directories, build types, compilers, and generators are set in the generated presets to ensure consistent CMake invocations across the execution environment.
+**CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. *Output directories*, *build types*, *compilers*, and *generators* are set in the generated presets to ensure consistent CMake invocations across the execution environment. Even if these parameters are defined in the parent preset, the generated user preset overrides them.
+
+#### Job Execution
+
+Each CI matrix job runs the following steps:
+
+```bash
+# Checkout the caller project
+git checkout <project-url>
+
+# Install packages: ubuntu
+sudo apt-get install -y <apt-packages>
+
+# Install packages: macos
+brew install <brew-packages>
+
+# Install packages: windows
+choco install -y <choco-packages>
+winget install --id <winget-package> #; winget install --id <winget-another-package>; <etc>
+
+# Install packages: all
+pip install <pip-packages>
+
+# Run post-package command (if passed via packages input)
+<run-command>
+
+# Write generated CMake user presets
+cat > CMakeUserPresets.json <<'EOF'
+<generated-presets>
+EOF
+
+# Configure
+cmake --preset <job-name>
+
+# Build
+cmake --build --preset <job-name>
+
+# Test (if test preset is passed via cmake-presets input)
+ctest --preset <job-name>
+```
 
 ### Usage
 
@@ -239,6 +297,56 @@ jobs:
           {
             "match-jobs": ["macos-*"],
             "test-preset": ""
+          }
+        ]
+```
+
+#### Additional Packages
+
+To install extra packages on specific platforms:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "apt-install": ["libpcap-dev"]
+          }
+        ]
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+#### Post-Package Command
+
+To run a command after package installation, e.g. starting a service:
+
+```yaml
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "apt-install": ["mosquitto"],
+            "run": "mosquitto -d"
+          },
+          {
+            "match-jobs": ["macos-*"],
+            "brew-install": ["mosquitto"],
+            "run": "$(brew --prefix mosquitto)/sbin/mosquitto -d"
+          },
+          {
+            "match-jobs": ["windows-*"],
+            "winget-install": ["EclipseFoundation.Mosquitto"]
           }
         ]
 ```
