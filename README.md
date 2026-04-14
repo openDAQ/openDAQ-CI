@@ -318,20 +318,45 @@ jobs:
             "apt-install": ["libpcap-dev"]
           }
         ]
-      cmake-presets: >
+```
+
+When multiple entries match the same job, packages are chained. For example:
+
+```yaml
+      packages: >
         [
           {
-            "configure-preset": "module",
-            "test-preset": "module-test"
+            "match-jobs": ["ubuntu-*"],
+            "apt-install": ["libpcap-dev"]
+          },
+          {
+            "match-jobs": ["ubuntu-20.04-*"],
+            "apt-install": ["mosquitto"]
           }
         ]
 ```
+
+In this case, Ubuntu 20.04 runners will execute:
+```shell
+apt install libpcap-dev mosquitto
+```
+while Ubuntu 24.04 runners will only install:
+```shell
+apt install libpcap-dev
+```
+
+**Important:** The reusable workflow chains only packages, but not the `run` field value, as explained below.
 
 #### Post-Package Command
 
 To run a command after package installation, e.g. starting a service:
 
 ```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
       packages: >
         [
           {
@@ -346,9 +371,111 @@ To run a command after package installation, e.g. starting a service:
           },
           {
             "match-jobs": ["windows-*"],
-            "winget-install": ["EclipseFoundation.Mosquitto"]
+            "winget-install": ["EclipseFoundation.Mosquitto"],
+            "run": "Start-Process 'C:\\Program Files\\mosquitto\\mosquitto.exe' -WindowStyle Hidden"
           }
         ]
+```
+
+The result is expanded as follows:
+
+```bash
+# All Ubuntu runners:
+apt install mosquitto
+mosquitto -d
+```
+
+```bash
+# All macOS runners:
+brew install mosquitto
+$(brew --prefix mosquitto)/sbin/mosquitto -d
+```
+
+```powershell
+# All Windows runners:
+winget install --id EclipseFoundation.Mosquitto
+Start-Process 'C:\Program Files\mosquitto\mosquitto.exe' -WindowStyle Hidden
+```
+
+Although packages are chained when multiple entries match, the `run` field applies a last-match-wins strategy — the order of entries matters. Consider the following input:
+
+```yml
+    with:
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "run": "./common-linux-config.sh"
+          },
+          {
+            "match-jobs": ["ubuntu-20.04-*"],
+            "run": "./special-linux-config.sh"
+          }
+        ]
+```
+
+The result is expanded as follows:
+
+```bash
+# Ubuntu 24.04 runners will execute:
+./common-linux-config.sh
+```
+
+```bash
+# Ubuntu 20.04 runners will execute:
+./special-linux-config.sh
+```
+
+Since the order matters, it is possible to skip `run` for specific configurations by setting it to an empty string:
+
+```yml
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "run": "./common-linux-config.sh"
+          },
+          {
+            "match-jobs": ["ubuntu-20.04-*"],
+            "run": ""
+          }
+        ]
+```
+
+In this case, the input will expand only into:
+
+```bash
+# Only Ubuntu 24.04 runners will execute:
+./common-linux-config.sh
+
+# while Ubuntu 20.04 runners will skip the command
+```
+
+**⚠️ Important:** There is a limitation that follows from the `run` exclusion approach and the last-match-wins strategy: the latest match overrides the previous one if the entries order is reversed.
+
+❌ Consider the following mistake:
+```yml
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-20.04-*"],
+            "run": "./special-linux-config.sh"
+          },
+          {
+            "match-jobs": ["ubuntu-*"],
+            "run": "./common-linux-config.sh"
+          }
+        ]
+```
+
+The result will differ from the caller's intent:
+
+```bash
+# Caller expects Ubuntu 20.04 to execute
+# ./special-linux-config.sh
+#
+# But instead all Ubuntu runners will execute:
+./common-linux-config.sh
 ```
 
 #### Rename Artifacts
