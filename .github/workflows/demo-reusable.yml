@@ -1,0 +1,43 @@
+# Manual workflow for testing reusable.yml with various input arguments
+# against the "hello world" demo C++ project and its GTest tests.
+name: Demo Reusable CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      exclude-jobs:
+        description: "JSON array of wildcard patterns to exclude matrix jobs"
+        type: string
+        default: '[]'
+      packages:
+        description: "JSON array of package requests"
+        type: string
+        default: '[]'
+      cmake-presets:
+        description: "JSON array of preset configs"
+        type: string
+        default: >
+          [
+            {
+              "configure-preset": "module",
+              "test-preset": "module-test"
+            }
+          ]
+      upload-pattern:
+        description: "Artifact names pattern"
+        type: string
+        default: '*'
+      timeout:
+        description: "JSON array of timeout configs"
+        type: string
+        default: '[]'
+
+jobs:
+  demo:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      exclude-jobs: "${{ github.event.inputs.exclude-jobs || '[]' }}"
+      packages: "${{ github.event.inputs.packages || '[]' }}"
+      cmake-presets: "${{ github.event.inputs.cmake-presets || '[{\"configure-preset\": \"module\", \"test-preset\": \"module-test\"}]' }}"
+      upload-pattern: "${{ github.event.inputs.upload-pattern || '*' }}"
+      timeout: "${{ github.event.inputs.timeout || '[]' }}"

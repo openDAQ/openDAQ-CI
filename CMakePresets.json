@@ -20,6 +20,19 @@
         {
             "name": "module-test",
             "configurePreset": "module",
+            "environment": {
+                "GTEST_FILTER": "-HelloTest.AlwaysFails"
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "module-test-failure",
+            "configurePreset": "module",
+            "environment": {
+                "GTEST_FILTER": "HelloTest.AlwaysFails"
+            },
             "output": {
                 "outputOnFailure": true
             }
