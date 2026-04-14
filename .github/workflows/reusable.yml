@@ -421,7 +421,7 @@ jobs:
         run: ctest --preset ${{ matrix.name }}
 
       - name: Upload test results
-        if: ${{ contains('success failure', steps.test.outcome) && matrix.gtest-artifact != '' }}
+        if: ${{ !cancelled() && contains('success failure', steps.test.outcome) && matrix.gtest-artifact != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.gtest-artifact }}
