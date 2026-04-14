@@ -23,6 +23,10 @@ on:
         description: "Pattern for artifact names, * is replaced with the original name, e.g. 'full-*'"
         type: string
         default: '*'
+      timeout:
+        description: 'JSON array of timeout configs, e.g. [{"match-jobs": ["*"], "timeout-minutes": 180}]'
+        type: string
+        default: '[]'
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -50,6 +54,7 @@ jobs:
           user_packages = json.loads("""${{ inputs.packages }}""")
           cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
+          timeout_configs = json.loads("""${{ inputs.timeout }}""")
 
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
           print(f"Input: packages = {json.dumps(user_packages) if user_packages else 'None'}")
@@ -87,6 +92,7 @@ jobs:
               "winget-install": [],
               "pip-install": [],
               "cmd-run-post-package": "",
+              "timeout-minutes": 120,
               "enable-tests": False,
               "gtest-artifact": "",
           }
@@ -210,6 +216,12 @@ jobs:
                   enable_tests = bool(test_preset)
                   gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
 
+                  # find timeout for this job
+                  timeout_minutes = cfg.get("timeout-minutes", 120)
+                  for req in timeout_configs:
+                      if matches_any(job_name, req.get("match-jobs", ["*"])):
+                          timeout_minutes = req.get("timeout-minutes", timeout_minutes)
+
                   matrix.append({
                       "name": job_name,
                       "runner": cfg["runner"],
@@ -220,6 +232,7 @@ jobs:
                       "cc": cfg.get("cc") or "",
                       "cxx": cfg.get("cxx") or "",
                       "build-type": build_type,
+                      "timeout-minutes": timeout_minutes,
                       "enable-tests": enable_tests,
                       "gtest-artifact": gtest_artifact,
                       **install_cmds,
@@ -349,7 +362,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.image }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate.outputs.matrix) }}
