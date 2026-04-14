@@ -100,6 +100,24 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #           '' disables artifact upload
     # Example: 'full-*'
     upload-pattern: ''
+
+    # Override job timeout per platform.
+    # Format: JSON array of objects
+    # Fields:
+    #   match-jobs      — job names list (optional: ["*"] default)
+    #   timeout-minutes — job timeout in minutes (required)
+    # Optional: [] empty, default 120 minutes
+    # Example: >
+    #   [
+    #     {
+    #       "timeout-minutes": 180
+    #     },
+    #     {
+    #       "match-jobs": ["windows-*"],
+    #       "timeout-minutes": 240
+    #     }
+    #   ]
+    timeout: ''
 ```
 
 ### Outputs
@@ -510,6 +528,60 @@ jobs:
           }
         ]
 ```
+
+#### Job Timeout
+
+The default job timeout is 120 minutes. To override it for all jobs:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      timeout: '[{"timeout-minutes": 240}]'
+```
+
+To set different timeouts per platform:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      timeout: >
+        [
+          {
+            "timeout-minutes": 180
+          },
+          {
+            "match-jobs": ["windows-*"],
+            "timeout-minutes": 240
+          }
+        ]
+```
+
+In this example, all jobs get a 180-minute timeout, except Windows jobs which get 240 minutes.
+
+**⚠️ Important:** The last-match-wins strategy applies to `timeout` the same way as to `run`. The order of entries matters — the latest match overrides the previous one if the entries order is reversed.
+
+❌ Consider the following mistake:
+```yml
+with:
+  timeout: >
+    [
+      {
+        "match-jobs": ["windows-*"],
+        "timeout-minutes": 240
+      },
+      {
+        "timeout-minutes": 180 
+      }
+    ]
+```
+
+The caller expects Windows runners to have 240-minute timeout. But instead all runners including Windows will get 180-minute timeout.
 
 ## License
 
