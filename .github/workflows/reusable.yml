@@ -68,6 +68,7 @@ jobs:
               "package-managers": [],
               "generator": None,
               "toolset": None,
+              "target-arch": None,
               "cc": None,
               "cxx": None,
               "cmd-sudo": None,
@@ -130,6 +131,9 @@ jobs:
           _macos_26_armv8_ninja   = {**_macos_ninja, "runner": "macos-26"}
           _macos_26_x86_64_ninja  = {**_macos_ninja, "runner": "macos-26-intel"}
 
+          _apple_clang_cc = { "cc": "/usr/bin/clang" }
+          _apple_clang_cxx = { "cxx": "/usr/bin/clang++" }
+
           # --- Windows configs ---
 
           _windows_2025_x86_64_msvs = {
@@ -143,17 +147,20 @@ jobs:
           # --- Jobs configs ---
 
           jobs_cfg = {
-              "windows-2025-x86_64-msvs-v143":        {**_windows_2025_x86_64_msvs,  "toolset": "v143"},
+              "windows-2025-x86_64-msvs-v143-debug":        {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
+              "windows-2025-x86-msvs-v143-release":         {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
 
-              "ubuntu-20.04-x86_64-ninja-gcc-7":      {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",          "cxx": "g++-7",       "apt-install": ["gcc-7", "g++-7"]},
-              "ubuntu-20.04-x86_64-ninja-clang-9":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",        "cxx": "clang++-9",   "apt-install": ["clang-9"]},
-              "ubuntu-24.04-x86_64-ninja-gcc-14":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",         "cxx": "g++-14",      "apt-install": ["gcc-14", "g++-14"]},
-              "ubuntu-24.04-x86_64-ninja-clang-18":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",       "cxx": "clang++-18",  "apt-install": ["clang-18"]},
+              "ubuntu-20.04-x86_64-ninja-gcc-7-release":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7"]},
+              "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
 
-              "macos-15-armv8-ninja-appleclang":      {**_macos_15_armv8_ninja,       "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++"},
-              "macos-15-x86_64-ninja-appleclang":     {**_macos_15_x86_64_ninja,      "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++"},
-              "macos-26-armv8-ninja-appleclang":      {**_macos_26_armv8_ninja,       "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++"},
-              "macos-26-x86_64-ninja-appleclang":     {**_macos_26_x86_64_ninja,      "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++"},
+              "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
+
+              "macos-26-x86_64-ninja-appleclang-debug":     {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Debug"},
+              "macos-26-armv8-ninja-appleclang-release":    {**_macos_26_armv8_ninja,       **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
+
+              "macos-15-x86_64-ninja-appleclang-release":   {**_macos_15_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
           }
 
           # --- Generate jobs matrix ---
@@ -162,81 +169,81 @@ jobs:
               return any(fnmatch(name, p) for p in patterns)
 
           matrix = []
-          for cfg_key, cfg in jobs_cfg.items():
-              for build_type in ["Release", "Debug"]:
-                  job_name = f"{cfg_key}-{build_type.lower()}"
+          for job_name, cfg in jobs_cfg.items():
+              build_type = cfg.get("build-type", "Release")
 
-                  if matches_any(job_name, exclude_jobs):
-                      print(f"Matrix job '{job_name}': skipped by 'exclude-jobs' input")
+              if matches_any(job_name, exclude_jobs):
+                  print(f"Matrix job '{job_name}': skipped by 'exclude-jobs' input")
+                  continue
+
+              supported_pms = set(cfg.get("package-managers", []))
+
+              # collect user packages and run command for this job
+              user_pkgs = {}
+              for req in user_packages:
+                  if not matches_any(job_name, req.get("match-jobs", ["*"])):
                       continue
 
-                  supported_pms = set(cfg.get("package-managers", []))
-
-                  # collect user packages and run command for this job
-                  user_pkgs = {}
-                  for req in user_packages:
-                      if not matches_any(job_name, req.get("match-jobs", ["*"])):
+                  user_install = {k: v for k, v in req.items() if k.endswith("-install") and v}
+                  for k, v in user_install.items():
+                      pm = k.removesuffix("-install")
+                      if pm not in supported_pms:
+                          print(f"::warning::Matrix job '{job_name}': '{pm}' is not supported by this runner, skipping installation of {v}")
                           continue
+                      user_pkgs.setdefault(k, []).extend(v)
+                  user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
 
-                      user_install = {k: v for k, v in req.items() if k.endswith("-install") and v}
-                      for k, v in user_install.items():
-                          pm = k.removesuffix("-install")
-                          if pm not in supported_pms:
-                              print(f"::warning::Matrix job '{job_name}': '{pm}' is not supported by this runner, skipping installation of {v}")
-                              continue
-                          user_pkgs.setdefault(k, []).extend(v)
-                      user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
+              # merge and build install commands per package manager
+              install_cmds = {}
+              for pm in supported_pms:
+                  sudo = cfg.get("cmd-sudo") or ""
+                  envs = " ".join(cfg.get(f"cmd-{pm}-envs", []))
 
-                  # merge and build install commands per package manager
-                  install_cmds = {}
-                  for pm in supported_pms:
-                      sudo = cfg.get("cmd-sudo") or ""
-                      envs = " ".join(cfg.get(f"cmd-{pm}-envs", []))
+                  install = cfg.get(f"{pm}-install-default", []) + cfg.get(f"{pm}-install", []) + user_pkgs.get(f"{pm}-install", [])
+                  if install:
+                      cmd = cfg.get(f"cmd-{pm}-install", "")
+                      if not cmd:
+                          print(f"::error::Matrix job '{job_name}': 'cmd-{pm}-install' is not defined but packages {install} are requested")
+                      elif pm == "winget":
+                          prefix = f"{envs} " if envs else ""
+                          install_cmds[f"cmd-install-{pm}"] = "; ".join(f"{prefix}{cmd} --id {pkg}" for pkg in install)
+                      else:
+                          prefix = f"{sudo} {envs}" if pm == "apt" and sudo else envs
+                          install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in [prefix, cmd, *install] if p)
 
-                      install = cfg.get(f"{pm}-install-default", []) + cfg.get(f"{pm}-install", []) + user_pkgs.get(f"{pm}-install", [])
-                      if install:
-                          cmd = cfg.get(f"cmd-{pm}-install", "")
-                          if not cmd:
-                              print(f"::error::Matrix job '{job_name}': 'cmd-{pm}-install' is not defined but packages {install} are requested")
-                          elif pm == "winget":
-                              prefix = f"{envs} " if envs else ""
-                              install_cmds[f"cmd-install-{pm}"] = "; ".join(f"{prefix}{cmd} --id {pkg}" for pkg in install)
-                          else:
-                              prefix = f"{sudo} {envs}" if pm == "apt" and sudo else envs
-                              install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in [prefix, cmd, *install] if p)
+              install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
 
-                  install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
+              # find test-preset for this job
+              test_preset = ""
+              for req in cmake_presets:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      test_preset = req.get("test-preset", test_preset)
 
-                  # find test-preset for this job
-                  test_preset = ""
-                  for req in cmake_presets:
-                      if matches_any(job_name, req.get("match-jobs", ["*"])):
-                          test_preset = req.get("test-preset", test_preset)
+              enable_tests = bool(test_preset)
+              gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
 
-                  enable_tests = bool(test_preset)
-                  gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
+              # find timeout for this job
+              timeout_minutes = cfg.get("timeout-minutes", 120)
+              for req in timeout_configs:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
-                  # find timeout for this job
-                  timeout_minutes = cfg.get("timeout-minutes", 120)
-                  for req in timeout_configs:
-                      if matches_any(job_name, req.get("match-jobs", ["*"])):
-                          timeout_minutes = req.get("timeout-minutes", timeout_minutes)
-
-                  matrix.append({
-                      "name": job_name,
-                      "runner": cfg["runner"],
-                      "image": cfg.get("image") or "",
-                      "bootstrap": cfg.get("bootstrap") or "",
-                      "generator": cfg["generator"],
-                      "toolset": cfg.get("toolset") or "",
-                      "cc": cfg.get("cc") or "",
-                      "cxx": cfg.get("cxx") or "",
-                      "build-type": build_type,
-                      "timeout-minutes": timeout_minutes,
-                      "enable-tests": enable_tests,
-                      "gtest-artifact": gtest_artifact,
-                      **install_cmds,
-                  })
+              matrix.append({
+                  "name": job_name,
+                  "runner": cfg["runner"],
+                  "image": cfg.get("image") or "",
+                  "bootstrap": cfg.get("bootstrap") or "",
+                  "generator": cfg["generator"],
+                  "toolset": cfg.get("toolset") or "",
+                  "target-arch": cfg.get("target-arch") or "",
+                  "cc": cfg.get("cc") or "",
+                  "cxx": cfg.get("cxx") or "",
+                  "build-type": build_type,
+                  "timeout-minutes": timeout_minutes,
+                  "enable-tests": enable_tests,
+                  "gtest-artifact": gtest_artifact,
+                  **install_cmds,
+              })
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"matrix={json.dumps({'include': matrix})}\n")
@@ -263,6 +270,8 @@ jobs:
               build_type = entry.get("build-type") or ""
               generator = entry.get("generator") or ""
               toolset = entry.get("toolset") or ""
+              target_arch = entry.get("target-arch") or ""
+              architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
               cc = entry.get("cc") or ""
               cxx = entry.get("cxx") or ""
 
@@ -279,6 +288,7 @@ jobs:
                   **({"inherits": [configure_preset]} if configure_preset else {}),
                   **({"generator": generator} if generator else {}),
                   **({"toolset": toolset} if toolset else {}),
+                  **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),

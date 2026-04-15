@@ -148,11 +148,16 @@ The pattern components and their values are listed in the platform naming table:
 
 | os | arch | generator | compiler | build_type |
 |----|------|-----------|----------|------------|
-| ubuntu-20.04 | x86_64 | ninja | gcc-7, clang-9 | release, debug |
-| ubuntu-24.04 | x86_64 | ninja | gcc-14, clang-18 | release, debug |
-| macos-15 | armv8, x86_64 | ninja | appleclang | release, debug |
-| macos-26 | armv8, x86_64 | ninja | appleclang | release, debug |
-| windows-2025 | x86_64 | msvs | v143 | release, debug |
+| windows-2025 | x86_64 | msvs | v143 | debug |
+| windows-2025 | x86 | msvs | v143 | release |
+| ubuntu-20.04 | x86_64 | ninja | gcc-7 | release |
+| ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
+| ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
+| ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
+| ubuntu-24.04 | x86_64 | ninja | clang-18 | release |
+| macos-26 | x86_64 | ninja | appleclang | debug |
+| macos-26 | armv8 | ninja | appleclang | release |
+| macos-15 | x86_64 | ninja | appleclang | release |
 
 Example: `ubuntu-24.04-x86_64-ninja-gcc-14-release`
 
