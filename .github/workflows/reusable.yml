@@ -1,0 +1,495 @@
+name: Build and Test
+
+on:
+  workflow_call:
+    inputs:
+      opendaq-ref:
+        description: "openDAQ commit, branch or tag. If empty, uses the opendaq_ref file from the repo."
+        type: string
+        default: ''
+      exclude-jobs:
+        description: "JSON array of wildcard patterns to exclude matrix jobs, e.g. '[\"*-debug\", \"macos-*\"]'"
+        type: string
+        default: '[]'
+      packages:
+        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]'
+        type: string
+        default: '[]'
+      cmake-presets:
+        description: 'JSON array of preset configs, e.g. [{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
+        type: string
+        default: '[]'
+      upload-pattern:
+        description: "Pattern for artifact names, * is replaced with the original name, e.g. 'full-*'"
+        type: string
+        default: '*'
+      timeout:
+        description: 'JSON array of timeout configs, e.g. [{"match-jobs": ["*"], "timeout-minutes": 180}]'
+        type: string
+        default: '[]'
+    outputs:
+      matrix:
+        description: "Generated build matrix JSON"
+        value: ${{ jobs.generate.outputs.matrix }}
+      cmake-user-presets:
+        description: "Generated CMakeUserPresets.json content"
+        value: ${{ jobs.generate.outputs.cmake-user-presets }}
+
+jobs:
+  generate:
+    name: Generate
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      cmake-user-presets: ${{ steps.presets.outputs.cmake-user-presets }}
+    steps:
+      - name: Generate matrix
+        id: matrix
+        shell: python3 {0}
+        run: |
+          import json, os
+          from fnmatch import fnmatch
+
+          exclude_jobs = json.loads("""${{ inputs.exclude-jobs }}""")
+          user_packages = json.loads("""${{ inputs.packages }}""")
+          cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
+          upload_pattern = """${{ inputs.upload-pattern }}"""
+          timeout_configs = json.loads("""${{ inputs.timeout }}""")
+
+          print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
+          print(f"Input: packages = {json.dumps(user_packages) if user_packages else 'None'}")
+
+          # --- General config ---
+
+          _base = {
+              "runner": None,
+              "image": None,
+              "bootstrap": None,
+              "package-managers": [],
+              "generator": None,
+              "toolset": None,
+              "target-arch": None,
+              "cc": None,
+              "cxx": None,
+              "cmd-sudo": None,
+              "cmd-apt-envs": ["DEBIAN_FRONTEND=noninteractive", "TZ=Etc/UTC"],
+              "cmd-brew-envs": [],
+              "cmd-choco-envs": [],
+              "cmd-winget-envs": [],
+              "cmd-pip-envs": [],
+              "cmd-apt-install": "apt-get install -y --no-install-recommends",
+              "cmd-pip-install": "pip install",
+              "cmd-brew-install": "brew install",
+              "cmd-choco-install": "choco install -y",
+              "cmd-winget-install": "winget install --accept-source-agreements --accept-package-agreements",
+              "apt-install-default": [],
+              "brew-install-default": [],
+              "choco-install-default": [],
+              "winget-install-default": [],
+              "pip-install-default": [],
+              "apt-install": [],
+              "brew-install": [],
+              "choco-install": [],
+              "winget-install": [],
+              "pip-install": [],
+              "cmd-run-post-package": "",
+              "timeout-minutes": 120,
+              "enable-tests": False,
+              "gtest-artifact": "",
+          }
+
+          # --- Ubuntu configs ---
+
+          _ubuntu_guest_x86_64_ninja = {
+              **_base,
+              "runner": "ubuntu-latest",
+              "bootstrap": "apt-get update && apt-get install -y git",
+              "package-managers": ["apt", "pip"],
+              "cmd-sudo": "",
+              "generator": "Ninja",
+              "cc": "gcc",
+              "cxx": "g++",
+              "apt-install-default": ["mono-runtime", "libmono-system-json-microsoft4.0-cil", "libmono-system-data4.0-cil", "python3-pip", "jq"],
+              "pip-install-default": ["cmake", "ninja"],
+          }
+
+          _ubuntu_20_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:20.04" }
+          _ubuntu_24_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:24.04", "cmd-pip-install": "pip install --break-system-packages" }
+
+          # --- macOS configs ---
+
+          _macos_ninja = { 
+              **_base,
+              "package-managers": ["brew", "pip"],
+              "brew-install-default": ["mono"],              
+              "generator": "Ninja", 
+              "pip-install-default": ["cmake", "ninja"]
+          }
+
+          _macos_15_armv8_ninja   = {**_macos_ninja, "runner": "macos-15"}
+          _macos_15_x86_64_ninja  = {**_macos_ninja, "runner": "macos-15-intel"}
+          _macos_26_armv8_ninja   = {**_macos_ninja, "runner": "macos-26"}
+          _macos_26_x86_64_ninja  = {**_macos_ninja, "runner": "macos-26-intel"}
+
+          _apple_clang_cc = { "cc": "/usr/bin/clang" }
+          _apple_clang_cxx = { "cxx": "/usr/bin/clang++" }
+
+          # --- Windows configs ---
+
+          _windows_2025_x86_64_msvs = {
+              **_base,
+              "runner": "windows-2025",
+              "generator": "Visual Studio 17 2022",
+              "package-managers": ["choco", "winget", "pip"],
+              "pip-install-default": ["cmake"],
+          }
+
+          # --- Jobs configs ---
+
+          jobs_cfg = {
+              "windows-2025-x86_64-msvs-v143-debug":        {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
+              "windows-2025-x86-msvs-v143-release":         {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
+
+              "ubuntu-20.04-x86_64-ninja-gcc-7-release":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7"]},
+              "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
+
+              "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
+
+              "macos-26-x86_64-ninja-appleclang-debug":     {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Debug"},
+              "macos-26-armv8-ninja-appleclang-release":    {**_macos_26_armv8_ninja,       **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
+
+              "macos-15-x86_64-ninja-appleclang-release":   {**_macos_15_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
+          }
+
+          # --- Generate jobs matrix ---
+
+          def matches_any(name, patterns):
+              return any(fnmatch(name, p) for p in patterns)
+
+          matrix = []
+          for job_name, cfg in jobs_cfg.items():
+              build_type = cfg.get("build-type", "Release")
+
+              if matches_any(job_name, exclude_jobs):
+                  print(f"Matrix job '{job_name}': skipped by 'exclude-jobs' input")
+                  continue
+
+              supported_pms = set(cfg.get("package-managers", []))
+
+              # collect user packages and run command for this job
+              user_pkgs = {}
+              for req in user_packages:
+                  if not matches_any(job_name, req.get("match-jobs", ["*"])):
+                      continue
+
+                  user_install = {k: v for k, v in req.items() if k.endswith("-install") and v}
+                  for k, v in user_install.items():
+                      pm = k.removesuffix("-install")
+                      if pm not in supported_pms:
+                          print(f"::warning::Matrix job '{job_name}': '{pm}' is not supported by this runner, skipping installation of {v}")
+                          continue
+                      user_pkgs.setdefault(k, []).extend(v)
+                  user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
+
+              # merge and build install commands per package manager
+              install_cmds = {}
+              for pm in supported_pms:
+                  sudo = cfg.get("cmd-sudo") or ""
+                  envs = " ".join(cfg.get(f"cmd-{pm}-envs", []))
+
+                  install = cfg.get(f"{pm}-install-default", []) + cfg.get(f"{pm}-install", []) + user_pkgs.get(f"{pm}-install", [])
+                  if install:
+                      cmd = cfg.get(f"cmd-{pm}-install", "")
+                      if not cmd:
+                          print(f"::error::Matrix job '{job_name}': 'cmd-{pm}-install' is not defined but packages {install} are requested")
+                      elif pm == "winget":
+                          prefix = f"{envs} " if envs else ""
+                          install_cmds[f"cmd-install-{pm}"] = "; ".join(f"{prefix}{cmd} --id {pkg}" for pkg in install)
+                      else:
+                          prefix = f"{sudo} {envs}" if pm == "apt" and sudo else envs
+                          install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in [prefix, cmd, *install] if p)
+
+              install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
+
+              # find test-preset for this job
+              test_preset = ""
+              for req in cmake_presets:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      test_preset = req.get("test-preset", test_preset)
+
+              enable_tests = bool(test_preset)
+              gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
+
+              # find timeout for this job
+              timeout_minutes = cfg.get("timeout-minutes", 120)
+              for req in timeout_configs:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      timeout_minutes = req.get("timeout-minutes", timeout_minutes)
+
+              matrix.append({
+                  "name": job_name,
+                  "runner": cfg["runner"],
+                  "image": cfg.get("image") or "",
+                  "bootstrap": cfg.get("bootstrap") or "",
+                  "generator": cfg["generator"],
+                  "toolset": cfg.get("toolset") or "",
+                  "target-arch": cfg.get("target-arch") or "",
+                  "cc": cfg.get("cc") or "",
+                  "cxx": cfg.get("cxx") or "",
+                  "build-type": build_type,
+                  "timeout-minutes": timeout_minutes,
+                  "enable-tests": enable_tests,
+                  "gtest-artifact": gtest_artifact,
+                  **install_cmds,
+              })
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"matrix={json.dumps({'include': matrix})}\n")
+
+          print(f"Output: matrix = {json.dumps({'include': matrix}, indent=2)}")
+
+      - name: Generate user presets
+        id: presets
+        shell: python3 {0}
+        run: |
+          import json, os
+          from fnmatch import fnmatch
+
+          cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
+          matrix = json.loads("""${{ steps.matrix.outputs.matrix }}""")["include"]
+
+          print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
+
+          build_dir = "build/output"
+          user_presets = {"version": 4, "configurePresets": [], "buildPresets": [], "testPresets": []}
+
+          for entry in matrix:
+              name = entry["name"]
+              build_type = entry.get("build-type") or ""
+              generator = entry.get("generator") or ""
+              toolset = entry.get("toolset") or ""
+              target_arch = entry.get("target-arch") or ""
+              architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
+              cc = entry.get("cc") or ""
+              cxx = entry.get("cxx") or ""
+
+              # find matching cmake-presets config
+              configure_preset = ""
+              test_preset = ""
+              for req in cmake_presets:
+                  if any(fnmatch(name, p) for p in req.get("match-jobs", ["*"])):
+                      configure_preset = req.get("configure-preset", configure_preset)
+                      test_preset = req.get("test-preset", test_preset)
+
+              user_presets["configurePresets"].append({
+                  "name": name,
+                  **({"inherits": [configure_preset]} if configure_preset else {}),
+                  **({"generator": generator} if generator else {}),
+                  **({"toolset": toolset} if toolset else {}),
+                  **({"architecture": architecture} if architecture else {}),
+                  "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
+                  "cacheVariables": {
+                      **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
+                      **({"CMAKE_C_COMPILER": cc} if cc else {}),
+                      **({"CMAKE_CXX_COMPILER": cxx} if cxx else {}),
+                  },
+              })
+
+              user_presets["buildPresets"].append({
+                  "name": name,
+                  "configurePreset": name,
+                  **({"configuration": build_type} if build_type else {}),
+              })
+
+              if test_preset:
+                  user_presets["testPresets"].append({
+                      "name": name,
+                      "configurePreset": name,
+                      "inherits": [test_preset],
+                      **({"configuration": build_type} if build_type else {}),
+                      "output": {"outputOnFailure": True},
+                  })
+
+          with open("CMakeUserPresets.json", "w") as f:
+              json.dump(user_presets, f, indent=2)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"cmake-user-presets={json.dumps(user_presets)}\n")
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
+          overall="✅"
+          [[ "${{ steps.matrix.outcome }}" == "failure" || "${{ steps.presets.outcome }}" == "failure" ]] && overall="❌"
+          {
+            echo "<details><summary>${overall} Generate job inputs</summary>"
+            echo ""
+            echo '```json'
+            jq -n \
+              --arg ref "${{ inputs.opendaq-ref }}" \
+              --argjson exclude '${{ inputs.exclude-jobs || '[]' }}' \
+              --argjson packages '${{ inputs.packages || '[]' }}' \
+              --argjson presets '${{ inputs.cmake-presets || '[]' }}' \
+              --arg upload "${{ inputs.upload-pattern }}" \
+              '{
+                "opendaq-ref": $ref,
+                "exclude-jobs": $exclude,
+                "packages": $packages,
+                "cmake-presets": $presets,
+                "upload-pattern": $upload
+              }'
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details><summary>$(s ${{ steps.matrix.outcome }}) Generate matrix (matrix.json)</summary>"
+            echo ""
+            echo '```json'
+            echo '${{ steps.matrix.outputs.matrix }}' | jq . 2>/dev/null || echo "Not generated"
+            echo ""
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details><summary>$(s ${{ steps.presets.outcome }}) Generate presets (CMakeUserPresets.json)</summary>"
+            echo ""
+            echo '```json'
+            cat CMakeUserPresets.json 2>/dev/null || echo "Not generated"
+            echo ""
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    needs: generate
+    if: ${{ needs.generate.outputs.matrix != '' }}
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate.outputs.matrix) }}
+
+    steps:
+      - name: Bootstrap
+        if: matrix.bootstrap != ''
+        run: ${{ matrix.bootstrap }}
+
+      - uses: actions/checkout@v6
+
+      - name: Override opendaq_ref
+        if: ${{ inputs.opendaq-ref != '' }}
+        shell: bash
+        run: echo "${{ inputs.opendaq-ref }}" > opendaq_ref
+
+      - name: Install dependencies (apt)
+        if: matrix.cmd-install-apt != ''
+        run: ${{ matrix.cmd-install-apt }}
+
+      - name: Install dependencies (brew)
+        if: matrix.cmd-install-brew != ''
+        run: ${{ matrix.cmd-install-brew }}
+
+      - name: Install dependencies (choco)
+        if: matrix.cmd-install-choco != ''
+        run: ${{ matrix.cmd-install-choco }}
+
+      - name: Install dependencies (winget)
+        if: matrix.cmd-install-winget != ''
+        run: ${{ matrix.cmd-install-winget }}
+
+      - name: Install dependencies (pip)
+        if: matrix.cmd-install-pip != ''
+        run: ${{ matrix.cmd-install-pip }}
+
+      - name: Run post-package
+        if: matrix.cmd-run-post-package != ''
+        run: ${{ matrix.cmd-run-post-package }}
+
+      - name: Write CI presets
+        shell: bash
+        run: echo '${{ needs.generate.outputs.cmake-user-presets }}' > CMakeUserPresets.json
+
+      - name: Configure
+        id: configure
+        run: cmake --preset ${{ matrix.name }}
+
+      - name: Build
+        id: build
+        run: cmake --build --preset ${{ matrix.name }}
+
+      - name: Setup GTest
+        id: setup-gtest
+        if: matrix.enable-tests
+        shell: python3 {0}
+        run: |
+          import os
+          test_results_dir = os.path.join(os.environ["GITHUB_WORKSPACE"], "build", "test-results")
+          os.makedirs(test_results_dir, exist_ok=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"test-results-dir={test_results_dir}{os.sep}\n")
+
+      - name: Test
+        id: test
+        if: matrix.enable-tests
+        env:
+          GTEST_OUTPUT: xml:${{ steps.setup-gtest.outputs.test-results-dir }}
+        run: ctest --preset ${{ matrix.name }}
+
+      - name: Upload test results
+        if: ${{ !cancelled() && contains('success failure', steps.test.outcome) && matrix.gtest-artifact != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.gtest-artifact }}
+          path: ${{ steps.setup-gtest.outputs.test-results-dir }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Job summary
+        if: failure()
+        shell: bash
+        run: |
+          s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
+          {
+            echo "<details><summary>❌ ${{ matrix.name }}</summary>"
+            echo ""
+            echo "<details><summary>CMakeUserPresets.json</summary>"
+            echo ""
+            echo '```bash'
+            echo "cat > CMakeUserPresets.json <<'EOF'"
+            jq . CMakeUserPresets.json 2>/dev/null
+            echo "EOF"
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo '```bash'
+            if [ -n "${{ inputs.opendaq-ref }}" ]; then
+              echo ""
+              echo "# Override openDAQ ref:"
+              echo 'echo "${{ inputs.opendaq-ref }}" > opendaq_ref'
+            fi
+            echo ""
+            echo "# $(s ${{ steps.configure.outcome }}) Configure:"
+            echo "cmake --preset ${{ matrix.name }}"
+            echo ""
+            echo "# $(s ${{ steps.build.outcome }}) Build:"
+            echo "cmake --build --preset ${{ matrix.name }}"
+            echo ""
+            if [ "${{ steps.test.outcome }}" = "skipped" ]; then
+              echo "# $(s ${{ steps.test.outcome }}) Test skipped"
+            else
+              echo "# $(s ${{ steps.test.outcome }}) Test:"
+              echo "ctest --preset ${{ matrix.name }}"
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

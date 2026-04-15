@@ -1,0 +1,41 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "module",
+            "hidden": true,
+            "cacheVariables": {
+                "HELLO_ENABLE_TESTS": "ON"
+            }
+        },
+        {
+            "name": "module-no-tests",
+            "hidden": true,
+            "cacheVariables": {
+                "HELLO_ENABLE_TESTS": "OFF"
+            }
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "module-test",
+            "configurePreset": "module",
+            "environment": {
+                "GTEST_FILTER": "-HelloTest.AlwaysFails"
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "module-test-failure",
+            "configurePreset": "module",
+            "environment": {
+                "GTEST_FILTER": "HelloTest.AlwaysFails"
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}
