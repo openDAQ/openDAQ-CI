@@ -77,11 +77,11 @@ jobs:
               "cmd-choco-envs": [],
               "cmd-winget-envs": [],
               "cmd-pip-envs": [],
-              "cmd-apt-install": "apt-get install -y --no-install-recommends",
-              "cmd-pip-install": "pip install",
-              "cmd-brew-install": "brew install",
-              "cmd-choco-install": "choco install -y",
-              "cmd-winget-install": "winget install --accept-source-agreements --accept-package-agreements",
+              "fmt-apt-install": "{sudo} {envs} apt-get install -y --no-install-recommends {pkgs}",
+              "fmt-pip-install": "python{ver}{arch} -m pip install {pkgs}",
+              "fmt-brew-install": "{envs} brew install {pkgs}",
+              "fmt-choco-install": "{envs} choco install -y {pkgs}",
+              "fmt-winget-install": "{envs} winget install --accept-source-agreements --accept-package-agreements --id {pkgs}",
               "apt-install-default": [],
               "brew-install-default": [],
               "choco-install-default": [],
@@ -93,6 +93,9 @@ jobs:
               "winget-install": [],
               "pip-install": [],
               "cmd-run-post-package": "",
+              "cmd-ctest-priv": "",
+              "cmd-setup-cmake": "",
+              "cmd-setup-ninja": "",
               "timeout-minutes": 120,
               "enable-tests": False,
               "gtest-artifact": "",
@@ -103,27 +106,31 @@ jobs:
           _ubuntu_guest_x86_64_ninja = {
               **_base,
               "runner": "ubuntu-latest",
-              "bootstrap": "apt-get update && apt-get install -y git",
+              "bootstrap": "apt-get update && apt-get install -y git python3-pip",
               "package-managers": ["apt", "pip"],
               "cmd-sudo": "",
               "generator": "Ninja",
               "cc": "gcc",
               "cxx": "g++",
-              "apt-install-default": ["mono-runtime", "libmono-system-json-microsoft4.0-cil", "libmono-system-data4.0-cil", "python3-pip", "jq"],
-              "pip-install-default": ["cmake", "ninja"],
+              "apt-install-default": ["mono-runtime", "libmono-system-json-microsoft4.0-cil", "libmono-system-data4.0-cil", "jq"],
           }
 
           _ubuntu_20_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:20.04" }
-          _ubuntu_24_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:24.04", "cmd-pip-install": "pip install --break-system-packages" }
+          _ubuntu_24_04_x86_64_ninja = {
+              **_ubuntu_guest_x86_64_ninja,
+              "image": "ubuntu:24.04",
+              "fmt-pip-install": "python{ver}{arch} -m pip install --break-system-packages {pkgs}",
+          }
 
           # --- macOS configs ---
 
-          _macos_ninja = { 
+          _macos_ninja = {
               **_base,
               "package-managers": ["brew", "pip"],
-              "brew-install-default": ["mono"],              
-              "generator": "Ninja", 
-              "pip-install-default": ["cmake", "ninja"]
+              "brew-install-default": ["mono"],
+              "generator": "Ninja",
+              "cmd-sudo": "sudo",
+              "fmt-pip-install": "python{ver}{arch} -m pip install --break-system-packages {pkgs}",
           }
 
           _macos_15_armv8_ninja   = {**_macos_ninja, "runner": "macos-15"}
@@ -141,7 +148,7 @@ jobs:
               "runner": "windows-2022",
               "generator": "Visual Studio 17 2022",
               "package-managers": ["choco", "winget", "pip"],
-              "pip-install-default": ["cmake"],
+              "fmt-pip-install": "py -{ver}{arch} -m pip install {pkgs}",
           }
 
           # --- Jobs configs ---
@@ -170,16 +177,25 @@ jobs:
 
           matrix = []
           for job_name, cfg in jobs_cfg.items():
+              sudo = cfg.get("cmd-sudo") or ""
               build_type = cfg.get("build-type", "Release")
 
               if matches_any(job_name, exclude_jobs):
                   print(f"Matrix job '{job_name}': skipped by 'exclude-jobs' input")
                   continue
 
+              fmt_pip_install = cfg.get("fmt-pip-install", "")
+              if not fmt_pip_install:
+                  print(f"::error::Matrix job '{job_name}': 'fmt-pip-install' is not defined")
+
+              cmd_setup_cmake = fmt_pip_install.format(ver="3", arch="", pkgs="cmake") if fmt_pip_install else ""
+              cmd_setup_ninja = fmt_pip_install.format(ver="3", arch="", pkgs="ninja") if fmt_pip_install and cfg.get("generator") == "Ninja" else ""
+
               supported_pms = set(cfg.get("package-managers", []))
 
-              # collect user packages and run command for this job
+              # collect user packages, run command, and python request for this job
               user_pkgs = {}
+              python_version = ""
               for req in user_packages:
                   if not matches_any(job_name, req.get("match-jobs", ["*"])):
                       continue
@@ -192,33 +208,41 @@ jobs:
                           continue
                       user_pkgs.setdefault(k, []).extend(v)
                   user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
+                  python_version = req.get("use-python-version", python_version)
 
+              python_arch = "x86" if cfg.get("target-arch", "") == "x86" else ""
+              py_ver = python_version or "3"
+              py_arch = "-32" if python_arch == "x86" else ""
+              
               # merge and build install commands per package manager
               install_cmds = {}
               for pm in supported_pms:
-                  sudo = cfg.get("cmd-sudo") or ""
                   envs = " ".join(cfg.get(f"cmd-{pm}-envs", []))
-
                   install = cfg.get(f"{pm}-install-default", []) + cfg.get(f"{pm}-install", []) + user_pkgs.get(f"{pm}-install", [])
                   if install:
-                      cmd = cfg.get(f"cmd-{pm}-install", "")
-                      if not cmd:
-                          print(f"::error::Matrix job '{job_name}': 'cmd-{pm}-install' is not defined but packages {install} are requested")
-                      elif pm == "winget":
-                          prefix = f"{envs} " if envs else ""
-                          install_cmds[f"cmd-install-{pm}"] = "; ".join(f"{prefix}{cmd} --id {pkg}" for pkg in install)
+                      fmt = cfg.get(f"fmt-{pm}-install", "")
+                      if not fmt:
+                          print(f"::error::Matrix job '{job_name}': 'fmt-{pm}-install' is not defined but packages {install} are requested")
+                          continue
+
+                      fmt_args = dict(sudo=sudo, envs=envs, ver=py_ver, arch=py_arch)
+                      if pm == "winget":
+                          install_cmds["cmd-install-winget"] = "; ".join(fmt.format(pkgs=pkg, **fmt_args).strip() for pkg in install)
                       else:
-                          prefix = f"{sudo} {envs}" if pm == "apt" and sudo else envs
-                          install_cmds[f"cmd-install-{pm}"] = " ".join(p for p in [prefix, cmd, *install] if p)
+                          install_cmds[f"cmd-install-{pm}"] = fmt.format(pkgs=" ".join(install), **fmt_args).strip()
 
               install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
 
-              # find test-preset for this job
+              # find test-preset and run-tests-priv for this job
               test_preset = ""
+              run_tests_priv = False
               for req in cmake_presets:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       test_preset = req.get("test-preset", test_preset)
-
+                      run_tests_priv = req.get("run-tests-priv", run_tests_priv)
+              
+              cmd_run_tests_priv = f"sudo -E " if run_tests_priv and sudo else ""
+              
               enable_tests = bool(test_preset)
               gtest_artifact = upload_pattern.replace("*", f"test-results-{job_name}") if enable_tests else ""
 
@@ -242,6 +266,11 @@ jobs:
                   "timeout-minutes": timeout_minutes,
                   "enable-tests": enable_tests,
                   "gtest-artifact": gtest_artifact,
+                  "cmd-ctest-priv": cmd_run_tests_priv,
+                  "cmd-setup-cmake": cmd_setup_cmake,
+                  "cmd-setup-ninja": cmd_setup_ninja,
+                  "python-version": python_version,
+                  "python-arch": python_arch,
                   **install_cmds,
               })
 
@@ -384,6 +413,14 @@ jobs:
 
       - uses: actions/checkout@v6
 
+      - name: Setup CMake
+        if: matrix.cmd-setup-cmake != ''
+        run: ${{ matrix.cmd-setup-cmake }}
+
+      - name: Setup Ninja
+        if: matrix.cmd-setup-ninja != ''
+        run: ${{ matrix.cmd-setup-ninja }}
+
       - name: Override opendaq_ref
         if: ${{ inputs.opendaq-ref != '' }}
         shell: bash
@@ -404,6 +441,33 @@ jobs:
       - name: Install dependencies (winget)
         if: matrix.cmd-install-winget != ''
         run: ${{ matrix.cmd-install-winget }}
+
+      - name: Setup Python (github.com/actions/setup-python)
+        if: matrix.image == '' && matrix.python-version != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.python-arch }}
+
+      - name: Setup Python (apt)
+        if: matrix.image == 'ubuntu:20.04' && matrix.python-version != ''
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
+
+      - name: Setup Python (ppa:deadsnakes/ppa)
+        if: matrix.image != '' && matrix.image != 'ubuntu:20.04' && matrix.python-version != '' && matrix.python-arch != 'x86'
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:deadsnakes/ppa
+          apt-get update
+          apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
+          python${PYTHON_VERSION} -m ensurepip
 
       - name: Install dependencies (pip)
         if: matrix.cmd-install-pip != ''
@@ -441,7 +505,7 @@ jobs:
         if: matrix.enable-tests
         env:
           GTEST_OUTPUT: xml:${{ steps.setup-gtest.outputs.test-results-dir }}
-        run: ctest --preset ${{ matrix.name }}
+        run: ${{ matrix.cmd-ctest-priv }} ctest --preset ${{ matrix.name }}
 
       - name: Upload test results
         if: ${{ !cancelled() && contains('success failure', steps.test.outcome) && matrix.gtest-artifact != '' }}

@@ -19,6 +19,7 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
     - [Exclude Tests](#exclude-tests)
     - [Additional Packages](#additional-packages)
     - [Post-Package Command](#post-package-command)
+    - [Python Version](#python-version)
     - [Rename Artifacts](#rename-artifacts)
 - [License](#license)
 
@@ -53,8 +54,10 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #   pip-install    — pip packages (optional, collect)
     #   brew-install   — brew packages (optional, collect)
     #   choco-install  — choco packages (optional, collect)
-    #   winget-install — winget packages (optional, collect)
-    #   run            — run after packages setup (optional, last match wins)
+    #   winget-install     — winget packages (optional, collect)
+    #   use-python-version — specific Python version (optional, last match wins)
+    #                        e.g. "3.12"; pip install uses this interpreter
+    #   run                — run after packages setup (optional, last match wins)
     # Optional: [] empty, no extra packages
     # Example: >
     #   [
@@ -71,6 +74,11 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #       "match-jobs": ["macos-*"],
     #       "brew-install": ["mosquitto"],
     #       "run": "$(brew --prefix mosquitto)/sbin/mosquitto -d"
+    #     },
+    #     {
+    #       "match-jobs": ["*"],
+    #       "use-python-version": "3.12",
+    #       "pip-install": ["numpy"]
     #     }
     #   ]
     packages: ''
@@ -83,12 +91,18 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #                      inherited, toolchains and build type are ignored
     #   test-preset      — test preset name (optional)
     #                      if omitted, tests will not run for matched jobs
+    #   run-tests-priv   — run ctest with elevated privileges (optional, last match wins)
+    #                      useful for tests that bind to privileged ports on macOS
     # Optional: [] empty, no configuration inherited, no tests run
     # Example: >
     #   [
     #     {
     #       "configure-preset": "module",
     #       "test-preset": "module-test"
+    #     },
+    #     {
+    #       "match-jobs": ["macos-*"],
+    #       "run-tests-priv": true
     #     }
     #   ]
     cmake-presets: ''
@@ -169,9 +183,9 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Exclude filtering.** Each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix. If no patterns match, the job is created.
 
-**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository.
+**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed.
 
-**Preset mapping.** The `cmake-presets` array is iterated in the same way. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job.
+**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS.
 
 **Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2022-x86_64-msvs-v143-release` into `my-call (test-results-windows-2022-x86_64-msvs-v143-release)`.
 
@@ -185,6 +199,10 @@ Each CI matrix job runs the following steps:
 # Checkout the caller project
 git checkout <project-url>
 
+# Install cmake and ninja (ninja only if generator is Ninja)
+python3 -m pip install cmake
+python3 -m pip install ninja
+
 # Install packages: ubuntu
 sudo apt-get install -y <apt-packages>
 
@@ -195,8 +213,13 @@ brew install <brew-packages>
 choco install -y <choco-packages>
 winget install --id <winget-package> #; winget install --id <winget-another-package>; <etc>
 
+# Setup Python (if use-python-version is passed via packages input)
+# - hosted runners: actions/setup-python@v5
+# - ubuntu:20.04 container: apt-get install python<ver>
+# - newer Ubuntu containers: add-apt-repository ppa:deadsnakes/ppa + apt-get install python<ver>
+
 # Install packages: all
-pip install <pip-packages>
+python<ver> -m pip install <pip-packages>
 
 # Run post-package command (if passed via packages input)
 <run-command>
@@ -213,6 +236,7 @@ cmake --preset <job-name>
 cmake --build --preset <job-name>
 
 # Test (if test preset is passed via cmake-presets input)
+# Prefixed with `sudo -E` if run-tests-priv is enabled for the job
 ctest --preset <job-name>
 ```
 
@@ -260,6 +284,24 @@ jobs:
           }
         ]
 ```
+
+If some tests require elevated privileges (e.g. binding to privileged ports on macOS), enable `run-tests-priv` for matching jobs:
+
+```yaml
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          },
+          {
+            "match-jobs": ["macos-*"],
+            "run-tests-priv": true
+          }
+        ]
+```
+
+In this example, all jobs run tests normally, while macOS jobs run `ctest` with `sudo -E`.
 
 #### Upstream Ref
 
@@ -500,6 +542,38 @@ The result will differ from the caller's intent:
 # But instead all Ubuntu runners will execute:
 ./common-linux-config.sh
 ```
+
+#### Python Version
+
+To request a specific Python interpreter for the job and install pip packages into it:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      packages: >
+        [
+          {
+            "use-python-version": "3.14",
+            "pip-install": ["numpy"]
+          }
+        ]
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module-python-3.14",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+The workflow installs Python 3.14 on the runner (via `actions/setup-python@v5` on hosted runners or via `apt`/`deadsnakes` in Ubuntu containers) and uses it for `pip install`. On `windows-*-x86-*` jobs, a 32-bit Python build is installed.
+
+**Notes:**
+- The `ubuntu-20.04` runner supports only Python 3.8 (via stock `apt`; `deadsnakes` PPA is not available for this image).
+- The module should expose a configure preset (e.g. `module-python-3.14`) that sets the appropriate CMake variables to use the requested Python version.
 
 #### Rename Artifacts
 
