@@ -94,8 +94,6 @@ jobs:
               "pip-install": [],
               "cmd-run-post-package": "",
               "cmd-ctest-priv": "",
-              "cmd-setup-cmake": "",
-              "cmd-setup-ninja": "",
               "timeout-minutes": 120,
               "enable-tests": False,
               "gtest-artifact": "",
@@ -188,9 +186,6 @@ jobs:
               if not fmt_pip_install:
                   print(f"::error::Matrix job '{job_name}': 'fmt-pip-install' is not defined")
 
-              cmd_setup_cmake = fmt_pip_install.format(ver="3", arch="", pkgs="cmake") if fmt_pip_install else ""
-              cmd_setup_ninja = fmt_pip_install.format(ver="3", arch="", pkgs="ninja") if fmt_pip_install and cfg.get("generator") == "Ninja" else ""
-
               supported_pms = set(cfg.get("package-managers", []))
 
               # collect user packages, run command, and python request for this job
@@ -267,8 +262,6 @@ jobs:
                   "enable-tests": enable_tests,
                   "gtest-artifact": gtest_artifact,
                   "cmd-ctest-priv": cmd_run_tests_priv,
-                  "cmd-setup-cmake": cmd_setup_cmake,
-                  "cmd-setup-ninja": cmd_setup_ninja,
                   "python-version": python_version,
                   "python-arch": python_arch,
                   **install_cmds,
@@ -414,12 +407,11 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup CMake
-        if: matrix.cmd-setup-cmake != ''
-        run: ${{ matrix.cmd-setup-cmake }}
+        uses: jwlawson/actions-setup-cmake@v2
 
       - name: Setup Ninja
-        if: matrix.cmd-setup-ninja != ''
-        run: ${{ matrix.cmd-setup-ninja }}
+        if: matrix.generator == 'Ninja'
+        uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Override opendaq_ref
         if: ${{ inputs.opendaq-ref != '' }}
