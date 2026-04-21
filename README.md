@@ -199,9 +199,8 @@ Each CI matrix job runs the following steps:
 # Checkout the caller project
 git checkout <project-url>
 
-# Install cmake and ninja (ninja only if generator is Ninja)
-python3 -m pip install cmake
-python3 -m pip install ninja
+# Setup cmake (via jwlawson/actions-setup-cmake@v2)
+# Setup ninja (via seanmiddleditch/gha-setup-ninja@v6; only for Ninja generator jobs)
 
 # Install packages: ubuntu
 sudo apt-get install -y <apt-packages>
