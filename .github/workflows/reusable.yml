@@ -7,6 +7,10 @@ on:
         description: "openDAQ commit, branch or tag. If empty, uses the opendaq_ref file from the repo."
         type: string
         default: ''
+      include-jobs:
+        description: "JSON array of wildcard patterns to include matrix jobs, e.g. '[\"ubuntu-*\"]'"
+        type: string
+        default: '["*"]'
       exclude-jobs:
         description: "JSON array of wildcard patterns to exclude matrix jobs, e.g. '[\"*-debug\", \"macos-*\"]'"
         type: string
@@ -50,12 +54,14 @@ jobs:
           import json, os
           from fnmatch import fnmatch
 
+          include_jobs = json.loads("""${{ inputs.include-jobs }}""")
           exclude_jobs = json.loads("""${{ inputs.exclude-jobs }}""")
           user_packages = json.loads("""${{ inputs.packages }}""")
           cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
           timeout_configs = json.loads("""${{ inputs.timeout }}""")
 
+          print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
           print(f"Input: packages = {json.dumps(user_packages) if user_packages else 'None'}")
 
@@ -177,6 +183,10 @@ jobs:
           for job_name, cfg in jobs_cfg.items():
               sudo = cfg.get("cmd-sudo") or ""
               build_type = cfg.get("build-type", "Release")
+
+              if not matches_any(job_name, include_jobs):
+                  print(f"Matrix job '{job_name}': skipped, does not match 'include-jobs' input")
+                  continue
 
               if matches_any(job_name, exclude_jobs):
                   print(f"Matrix job '{job_name}': skipped by 'exclude-jobs' input")
