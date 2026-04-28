@@ -15,6 +15,7 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
   - [Usage](#usage)
     - [Basic](#basic)
     - [Upstream Ref](#upstream-ref)
+    - [Include Jobs](#include-jobs)
     - [Exclude Jobs](#exclude-jobs)
     - [Exclude Tests](#exclude-tests)
     - [Additional Packages](#additional-packages)
@@ -39,7 +40,14 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     # Optional: '' - empty string, resolved by the caller
     opendaq-ref: ''
 
-    # Exclude matrix jobs by name.
+    # Include matrix jobs by name.
+    # Format: JSON array of strings
+    # Pattern: wildcard
+    # Optional: ["*"] default, all jobs included
+    # Example: '["ubuntu-*", "macos-*"]'
+    include-jobs: ''
+
+    # Exclude matrix jobs by name (applied after include-jobs).
     # Format: JSON array of strings
     # Pattern: wildcard
     # Optional: [] empty, no jobs excluded
@@ -164,11 +172,14 @@ The pattern components and their values are listed in the platform naming table:
 |----|------|-----------|----------|------------|
 | windows-2022 | x86_64 | msvs | v143 | debug |
 | windows-2022 | x86 | msvs | v143 | release |
+| windows-2022 | x86_64 | ninja | clang | release |
+| windows-2022 | x86_64 | ninja | intel-cc | release |
 | ubuntu-20.04 | x86_64 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
 | ubuntu-24.04 | x86_64 | ninja | clang-18 | release |
+| ubuntu-24.04 | x86_64 | ninja | intel-cc | release |
 | macos-26 | x86_64 | ninja | appleclang | debug |
 | macos-26 | armv8 | ninja | appleclang | release |
 | macos-15 | x86_64 | ninja | appleclang | release |
@@ -181,7 +192,9 @@ This naming approach allows the caller to flexibly configure which jobs to run o
 
 The generate stage takes the full set of matrix jobs and processes them as follows:
 
-**Exclude filtering.** Each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix. If no patterns match, the job is created.
+**Include filtering.** Each job name is matched against `include-jobs` patterns. If no pattern matches, the job is excluded from the matrix. By default, `include-jobs` is `["*"]` — all jobs are included.
+
+**Exclude filtering.** After include filtering, each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix.
 
 **Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed.
 
@@ -321,6 +334,35 @@ jobs:
           }
         ]
 ```
+
+#### Include Jobs
+
+To run only Ubuntu jobs:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      include-jobs: '["ubuntu-*"]'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "test-preset": "module-test"
+          }
+        ]
+```
+
+`include-jobs` and `exclude-jobs` can be combined — include filters first, then exclude is applied to what passed:
+
+```yaml
+      include-jobs: '["ubuntu-*"]'
+      exclude-jobs: '["*-clang-*"]'
+```
+
+In this example, only Ubuntu jobs are kept, with all Clang variants excluded.
 
 #### Exclude Jobs
 

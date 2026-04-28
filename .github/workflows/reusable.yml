@@ -54,12 +54,12 @@ jobs:
           import json, os
           from fnmatch import fnmatch
 
-          include_jobs = json.loads("""${{ inputs.include-jobs }}""")
-          exclude_jobs = json.loads("""${{ inputs.exclude-jobs }}""")
-          user_packages = json.loads("""${{ inputs.packages }}""")
-          cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
+          include_jobs = json.loads(r"""${{ inputs.include-jobs }}""")
+          exclude_jobs = json.loads(r"""${{ inputs.exclude-jobs }}""")
+          user_packages = json.loads(r"""${{ inputs.packages }}""")
+          cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
-          timeout_configs = json.loads("""${{ inputs.timeout }}""")
+          timeout_configs = json.loads(r"""${{ inputs.timeout }}""")
 
           print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
@@ -101,8 +101,10 @@ jobs:
               "cmd-run-post-package": "",
               "cmd-ctest-priv": "",
               "timeout-minutes": 120,
+              "setup-msvc-toolchain": False,
               "enable-tests": False,
               "gtest-artifact": "",
+              "apt-repos-ppa": [],
           }
 
           # --- Ubuntu configs ---
@@ -110,7 +112,7 @@ jobs:
           _ubuntu_guest_x86_64_ninja = {
               **_base,
               "runner": "ubuntu-latest",
-              "bootstrap": "apt-get update && apt-get install -y git python3-pip",
+              "bootstrap": "apt-get update && apt-get install -y git python3-pip curl gnupg ca-certificates",
               "package-managers": ["apt", "pip"],
               "cmd-sudo": "",
               "generator": "Ninja",
@@ -124,6 +126,7 @@ jobs:
               **_ubuntu_guest_x86_64_ninja,
               "image": "ubuntu:24.04",
               "fmt-pip-install": "python{ver}{arch} -m pip install --break-system-packages {pkgs}",
+              "allow-python-ppa": True,
           }
 
           # --- macOS configs ---
@@ -147,12 +150,37 @@ jobs:
 
           # --- Windows configs ---
 
-          _windows_2022_x86_64_msvs = {
+          _windows_2022_x86_64 = {
               **_base,
               "runner": "windows-2022",
-              "generator": "Visual Studio 17 2022",
               "package-managers": ["choco", "winget", "pip"],
               "fmt-pip-install": "py -{ver}{arch} -m pip install {pkgs}",
+          }
+
+          _windows_2022_x86_64_msvs  = {**_windows_2022_x86_64, "generator": "Visual Studio 17 2022"}
+          _windows_2022_x86_64_ninja = {**_windows_2022_x86_64, "generator": "Ninja"}
+
+          # --- Intel oneAPI configs (lookup by 'setup-intel-cc' job field) ---
+
+          _setup_intel_cc = {
+              "linux-intel-cc": {
+                  "url":         "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/99f4837a-25b7-425d-a897-60af022676ea/intel-oneapi-base-toolkit-2025.3.2.21.sh",
+                  "components":  ["intel.oneapi.lin.dpcpp-cpp-compiler"],
+                  "setvars":     "/opt/intel/oneapi/setvars.sh",
+                  "extra":       "",
+                  "fmt-extract": "./{installer} -x -f extracted --log extract.log",
+                  "fmt-install": "{sudo} extracted/*/bootstrapper -s --action install --components={components} --eula=accept --log-dir=. {extra}",
+                  "fmt-source":  '. "{setvars}" --force',
+              },
+              "windows-intel-cc": {
+                  "url":         "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/18a420c5-bfb7-4eb0-b04a-41a4fc7cc3b3/intel-oneapi-base-toolkit-2025.3.2.20.exe",
+                  "components":  ["intel.oneapi.win.cpp-dpcpp-common"],
+                  "setvars":     r"C:\Program Files (x86)\Intel\oneAPI\setvars.bat",
+                  "extra":       "-p=NEED_VS2017_INTEGRATION=0 -p=NEED_VS2019_INTEGRATION=0 -p=NEED_VS2022_INTEGRATION=0",
+                  "fmt-extract": "{installer} -s -x -f extracted --log extract.log",
+                  "fmt-install": "extracted\\bootstrapper.exe -s --action install --components={components} --eula=accept --log-dir=. {extra}",
+                  "fmt-source":  'call "{setvars}" --force',
+              },
           }
 
           # --- Jobs configs ---
@@ -161,12 +189,16 @@ jobs:
               "windows-2022-x86_64-msvs-v143-debug":        {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
               "windows-2022-x86-msvs-v143-release":         {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
 
+              "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release",  "setup-msvc-toolchain": True },
+              "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-msvc-toolchain": True, "setup-intel-cc": "windows-intel-cc" },
+
               "ubuntu-20.04-x86_64-ninja-gcc-7-release":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7"]},
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
 
               "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
+              "ubuntu-24.04-x86_64-ninja-intel-cc-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "icx",        "cxx": "icpx",            "build-type": "Release",  "setup-intel-cc": "linux-intel-cc"},
 
               "macos-26-x86_64-ninja-appleclang-debug":     {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Debug"},
               "macos-26-armv8-ninja-appleclang-release":    {**_macos_26_armv8_ninja,       **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
@@ -183,6 +215,14 @@ jobs:
           for job_name, cfg in jobs_cfg.items():
               sudo = cfg.get("cmd-sudo") or ""
               build_type = cfg.get("build-type", "Release")
+              cc  = cfg.get("cc") or ""
+              cxx = cfg.get("cxx") or ""
+              
+              apt_supported = "apt" in cfg.get("package-managers", [])
+              apt_repos_ppa = list(cfg.get("apt-repos-ppa") or []) if apt_supported else None
+
+              runner = cfg["runner"]
+              image = cfg.get("image") or ""
 
               if not matches_any(job_name, include_jobs):
                   print(f"Matrix job '{job_name}': skipped, does not match 'include-jobs' input")
@@ -215,10 +255,22 @@ jobs:
                   user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
                   python_version = req.get("use-python-version", python_version)
 
+              # Python via apt: deadsnakes (+ ensurepip) on allow-python-ppa configs, else system repos.
+              cmd_ensurepip = ""
+              if python_version and "apt" in supported_pms:
+                  user_pkgs.setdefault("apt-install", []).extend([
+                      f"python{python_version}",
+                      f"python{python_version}-dev",
+                      f"python{python_version}-venv",
+                  ])
+                  if cfg.get("allow-python-ppa"):
+                      apt_repos_ppa.append("deadsnakes/ppa")
+                      cmd_ensurepip = f"python{python_version} -m ensurepip || true"
+
               python_arch = "x86" if cfg.get("target-arch", "") == "x86" else ""
               py_ver = python_version or "3"
               py_arch = "-32" if python_arch == "x86" else ""
-              
+
               # merge and build install commands per package manager
               install_cmds = {}
               for pm in supported_pms:
@@ -257,18 +309,50 @@ jobs:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
+              setup_msvc_toolchain = cfg.get("setup-msvc-toolchain", False)
+
+              # Materialize PPA-setup command (only when apt is supported and any PPA is requested)
+              cmd_install_ppas = ""
+              if apt_supported and apt_repos_ppa:
+                  parts = [f"{sudo} apt-get install -y software-properties-common"]
+                  parts += [f"{sudo} add-apt-repository -y ppa:{p}" for p in apt_repos_ppa]
+                  parts += [f"{sudo} apt-get update"]
+                  cmd_install_ppas = " && ".join(parts)
+
+              # Materialize Intel oneAPI commands if 'setup-intel-cc' is set
+              intel_cc_url = ""
+              intel_cc_extract_cmd = ""
+              intel_cc_install_cmd = ""
+              source_cmd = ""
+              setup_intel_cc_key = cfg.get("setup-intel-cc") or ""
+              if setup_intel_cc_key:
+                  ic = _setup_intel_cc[setup_intel_cc_key]
+                  intel_cc_url = ic["url"]
+                  installer  = intel_cc_url.rsplit("/", 1)[-1]
+                  components = ",".join(ic["components"])
+                  intel_cc_extract_cmd = ic["fmt-extract"].format(installer=installer)
+                  intel_cc_install_cmd = ic["fmt-install"].format(sudo=sudo, components=components, extra=ic["extra"]).strip()
+                  source_cmd           = ic["fmt-source"].format(setvars=ic["setvars"])
+
               matrix.append({
                   "name": job_name,
-                  "runner": cfg["runner"],
-                  "image": cfg.get("image") or "",
+                  "runner": runner,
+                  "image": image,
                   "bootstrap": cfg.get("bootstrap") or "",
                   "generator": cfg["generator"],
                   "toolset": cfg.get("toolset") or "",
                   "target-arch": cfg.get("target-arch") or "",
-                  "cc": cfg.get("cc") or "",
-                  "cxx": cfg.get("cxx") or "",
+                  "cc": cc,
+                  "cxx": cxx,
                   "build-type": build_type,
                   "timeout-minutes": timeout_minutes,
+                  "setup-msvc-toolchain": setup_msvc_toolchain,
+                  "cmd-install-ppas":     cmd_install_ppas,
+                  "cmd-ensurepip":        cmd_ensurepip,
+                  "intel-cc-url":         intel_cc_url,
+                  "intel-cc-extract-cmd": intel_cc_extract_cmd,
+                  "intel-cc-install-cmd": intel_cc_install_cmd,
+                  "source-cmd":           source_cmd,
                   "enable-tests": enable_tests,
                   "gtest-artifact": gtest_artifact,
                   "cmd-ctest-priv": cmd_run_tests_priv,
@@ -289,8 +373,8 @@ jobs:
           import json, os
           from fnmatch import fnmatch
 
-          cmake_presets = json.loads("""${{ inputs.cmake-presets }}""")
-          matrix = json.loads("""${{ steps.matrix.outputs.matrix }}""")["include"]
+          cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
+          matrix = json.loads(r"""${{ steps.matrix.outputs.matrix }}""")["include"]
 
           print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
 
@@ -418,6 +502,8 @@ jobs:
 
       - name: Setup CMake
         uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: 4.3.2
 
       - name: Setup Ninja
         if: matrix.generator == 'Ninja'
@@ -427,6 +513,10 @@ jobs:
         if: ${{ inputs.opendaq-ref != '' }}
         shell: bash
         run: echo "${{ inputs.opendaq-ref }}" > opendaq_ref
+
+      - name: Setup PPA repositories
+        if: matrix.cmd-install-ppas != ''
+        run: ${{ matrix.cmd-install-ppas }}
 
       - name: Install dependencies (apt)
         if: matrix.cmd-install-apt != ''
@@ -444,32 +534,16 @@ jobs:
         if: matrix.cmd-install-winget != ''
         run: ${{ matrix.cmd-install-winget }}
 
-      - name: Setup Python (github.com/actions/setup-python)
+      - name: Setup Python (GitHub Actions)
         if: matrix.image == '' && matrix.python-version != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.python-arch }}
 
-      - name: Setup Python (apt)
-        if: matrix.image == 'ubuntu:20.04' && matrix.python-version != ''
-        shell: bash
-        env:
-          PYTHON_VERSION: ${{ matrix.python-version }}
-        run: |
-          apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
-
-      - name: Setup Python (ppa:deadsnakes/ppa)
-        if: matrix.image != '' && matrix.image != 'ubuntu:20.04' && matrix.python-version != '' && matrix.python-arch != 'x86'
-        shell: bash
-        env:
-          PYTHON_VERSION: ${{ matrix.python-version }}
-        run: |
-          apt-get install -y software-properties-common
-          add-apt-repository -y ppa:deadsnakes/ppa
-          apt-get update
-          apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
-          python${PYTHON_VERSION} -m ensurepip
+      - name: Setup Python (ensurepip)
+        if: matrix.cmd-ensurepip != ''
+        run: ${{ matrix.cmd-ensurepip }}
 
       - name: Install dependencies (pip)
         if: matrix.cmd-install-pip != ''
@@ -482,6 +556,59 @@ jobs:
       - name: Write CI presets
         shell: bash
         run: echo '${{ needs.generate.outputs.cmake-user-presets }}' > CMakeUserPresets.json
+
+      - name: Setup MSVC toolchain
+        if: matrix.setup-msvc-toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Intel C/C++ compiler
+        if: matrix.intel-cc-url
+        shell: python3 {0}
+        env:
+          URL:         ${{ matrix.intel-cc-url }}
+          EXTRACT_CMD: ${{ matrix.intel-cc-extract-cmd }}
+          INSTALL_CMD: ${{ matrix.intel-cc-install-cmd }}
+        run: |
+          import os, subprocess
+
+          url = os.environ["URL"]
+          installer = url.rsplit("/", 1)[-1]
+          subprocess.run(["curl", "--output", installer, "--url", url,
+                          "--retry", "5", "--retry-delay", "5", "-fSL"], check=True)
+          os.chmod(installer, 0o755)
+
+          subprocess.run(os.environ["EXTRACT_CMD"], shell=True, check=True)
+          subprocess.run(os.environ["INSTALL_CMD"], shell=True, check=True)
+
+      - name: Propagate sourced env to subsequent steps
+        if: matrix.source-cmd
+        shell: python3 {0}
+        env:
+          SOURCE_CMD: ${{ matrix.source-cmd }}
+        run: |
+          import os, sys, json, subprocess
+
+          dump = f'"{sys.executable}" -c "import os, json; print(json.dumps(dict(os.environ)))"'
+          result = subprocess.run(f'{os.environ["SOURCE_CMD"]} && {dump}',
+                                  shell=True, capture_output=True, text=True, check=True)
+          # Last line of stdout is the JSON dump (setvars.bat may print banner before it)
+          after = json.loads(result.stdout.splitlines()[-1])
+
+          path_key = next((k for k in after if k.upper() == "PATH"), None)
+          if path_key:
+              orig = set(os.environ.get(path_key, "").split(os.pathsep))
+              updated = after[path_key].split(os.pathsep)
+              new_entries = [p for p in updated if p and p not in orig]
+              with open(os.environ["GITHUB_PATH"], "a") as f:
+                  f.writelines(f"{p}\n" for p in new_entries)
+
+          internals = {"SHLVL", "=ExitCode", "=ExitCodeAscii"}
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              for k, v in after.items():
+                  if k == path_key or not v or k.startswith("_") or k in internals:
+                      continue
+                  if os.environ.get(k) != v:
+                      f.write(f"{k}={v}\n")
 
       - name: Configure
         id: configure
