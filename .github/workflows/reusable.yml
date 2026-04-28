@@ -580,7 +580,7 @@ jobs:
           subprocess.run(os.environ["EXTRACT_CMD"], shell=True, check=True)
           subprocess.run(os.environ["INSTALL_CMD"], shell=True, check=True)
 
-      - name: Propagate sourced env to subsequent steps
+      - name: Source environment
         if: matrix.source-cmd
         shell: python3 {0}
         env:
