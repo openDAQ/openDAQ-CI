@@ -192,7 +192,7 @@ jobs:
               "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release",  "setup-msvc-toolchain": True },
               "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-msvc-toolchain": True, "setup-intel-cc": "windows-intel-cc" },
 
-              "ubuntu-20.04-x86_64-ninja-gcc-7-release":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7"]},
+              "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "target-arch": "x86", "bootstrap": "dpkg --add-architecture i386 && apt-get update && apt-get install -y git python3-pip curl gnupg ca-certificates", "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"]},
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
 
               "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
@@ -497,6 +497,11 @@ jobs:
       - name: Bootstrap
         if: matrix.bootstrap != ''
         run: ${{ matrix.bootstrap }}
+
+      - name: Setup Git
+        if: matrix.image != ''
+        shell: bash
+        run: git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v6
 
