@@ -204,6 +204,8 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. *Output directories*, *build types*, *compilers*, and *generators* are set in the generated presets to ensure consistent CMake invocations across the execution environment. Even if these parameters are defined in the parent preset, the generated user preset overrides them.
 
+**Intel C/C++ compiler.** For `intel-cc` jobs, the workflow downloads the Intel oneAPI Base Toolkit web installer from the official Intel CDN (`https://registrationcenter-download.intel.com/`) — `.exe` for Windows, `.sh` (self-extracting archive) for Linux — and installs the C/C++ compiler component (`intel.oneapi.win.cpp-dpcpp-common` / `intel.oneapi.lin.dpcpp-cpp-compiler`). The compiler environment is then sourced via `setvars.bat`/`setvars.sh` and propagated to subsequent steps through `GITHUB_ENV` and `GITHUB_PATH`.
+
 #### Job Execution
 
 Each CI matrix job runs the following steps:
