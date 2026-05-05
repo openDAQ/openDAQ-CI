@@ -101,6 +101,8 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #                      if omitted, tests will not run for matched jobs
     #   run-tests-priv   — run ctest with elevated privileges (optional, last match wins)
     #                      useful for tests that bind to privileged ports on macOS
+    #   cache-variables  — extra CMake cache variables (optional, dict, merged across matches)
+    #                      CMAKE_BUILD_TYPE, CMAKE_C_COMPILER, CMAKE_CXX_COMPILER are reserved
     # Optional: [] empty, no configuration inherited, no tests run
     # Example: >
     #   [
@@ -111,6 +113,12 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #     {
     #       "match-jobs": ["macos-*"],
     #       "run-tests-priv": true
+    #     },
+    #     {
+    #       "match-jobs": ["windows-*"],
+    #       "cache-variables": {
+    #         "MY_MODULE_ENABLE_FOO": "ON"
+    #       }
     #     }
     #   ]
     cmake-presets: ''
@@ -198,7 +206,7 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed.
 
-**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS.
+**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS. The `cache-variables` field, if specified, contributes extra CMake cache variables to the generated user preset; values are merged across all matching entries (later matches override earlier ones). The reserved variables `CMAKE_BUILD_TYPE`, `CMAKE_C_COMPILER`, and `CMAKE_CXX_COMPILER` cannot be overridden — they are always set by the generated preset to ensure consistent builds across runners.
 
 **Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2022-x86_64-msvs-v143-release` into `my-call (test-results-windows-2022-x86_64-msvs-v143-release)`.
 

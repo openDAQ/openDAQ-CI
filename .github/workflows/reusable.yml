@@ -83,7 +83,7 @@ jobs:
               "cmd-choco-envs": [],
               "cmd-winget-envs": [],
               "cmd-pip-envs": [],
-              "fmt-apt-install": "{sudo} {envs} apt-get install -y --no-install-recommends {pkgs}",
+              "fmt-apt-install": "{sudo} {envs} apt-get -o Acquire::Retries=5 install -y --no-install-recommends {pkgs}",
               "fmt-pip-install": "python{ver}{arch} -m pip install {pkgs}",
               "fmt-brew-install": "{envs} brew install {pkgs}",
               "fmt-choco-install": "{envs} choco install -y {pkgs}",
@@ -155,6 +155,7 @@ jobs:
               "runner": "windows-2022",
               "package-managers": ["choco", "winget", "pip"],
               "fmt-pip-install": "py -{ver}{arch} -m pip install {pkgs}",
+              "setup-msvc-toolchain": True,
           }
 
           _windows_2022_x86_64_msvs  = {**_windows_2022_x86_64, "generator": "Visual Studio 17 2022"}
@@ -189,8 +190,8 @@ jobs:
               "windows-2022-x86_64-msvs-v143-debug":        {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
               "windows-2022-x86-msvs-v143-release":         {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
 
-              "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release",  "setup-msvc-toolchain": True },
-              "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-msvc-toolchain": True, "setup-intel-cc": "windows-intel-cc" },
+              "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release" },
+              "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-intel-cc": "windows-intel-cc" },
 
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "target-arch": "x86", "bootstrap": "dpkg --add-architecture i386 && apt-get update && apt-get install -y git python3-pip curl gnupg ca-certificates", "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"]},
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
@@ -293,10 +294,10 @@ jobs:
               # find test-preset and run-tests-priv for this job
               test_preset = ""
               run_tests_priv = False
-              for req in cmake_presets:
-                  if matches_any(job_name, req.get("match-jobs", ["*"])):
-                      test_preset = req.get("test-preset", test_preset)
-                      run_tests_priv = req.get("run-tests-priv", run_tests_priv)
+              for entry in cmake_presets:
+                  if matches_any(job_name, entry.get("match-jobs", ["*"])):
+                      test_preset = entry.get("test-preset", test_preset)
+                      run_tests_priv = entry.get("run-tests-priv", run_tests_priv)
               
               cmd_run_tests_priv = f"sudo -E " if run_tests_priv and sudo else ""
               
@@ -394,10 +395,12 @@ jobs:
               # find matching cmake-presets config
               configure_preset = ""
               test_preset = ""
-              for req in cmake_presets:
-                  if any(fnmatch(name, p) for p in req.get("match-jobs", ["*"])):
-                      configure_preset = req.get("configure-preset", configure_preset)
-                      test_preset = req.get("test-preset", test_preset)
+              cache_vars = {}
+              for entry in cmake_presets:
+                  if any(fnmatch(name, p) for p in entry.get("match-jobs", ["*"])):
+                      configure_preset = entry.get("configure-preset", configure_preset)
+                      test_preset = entry.get("test-preset", test_preset)
+                      cache_vars.update(entry.get("cache-variables", {}))
 
               user_presets["configurePresets"].append({
                   "name": name,
@@ -407,6 +410,7 @@ jobs:
                   **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
+                      **cache_vars,
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
                       **({"CMAKE_C_COMPILER": cc} if cc else {}),
                       **({"CMAKE_CXX_COMPILER": cxx} if cxx else {}),
