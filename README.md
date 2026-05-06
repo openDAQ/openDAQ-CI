@@ -148,8 +148,8 @@ The pattern components and their values are listed in the platform naming table:
 
 | os | arch | generator | compiler | build_type |
 |----|------|-----------|----------|------------|
-| windows-2025 | x86_64 | msvs | v143 | debug |
-| windows-2025 | x86 | msvs | v143 | release |
+| windows-2022 | x86_64 | msvs | v143 | debug |
+| windows-2022 | x86 | msvs | v143 | release |
 | ubuntu-20.04 | x86_64 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
@@ -173,7 +173,7 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Preset mapping.** The `cmake-presets` array is iterated in the same way. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job.
 
-**Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2025-x86_64-msvs-v143-release` into `my-call (test-results-windows-2025-x86_64-msvs-v143-release)`.
+**Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2022-x86_64-msvs-v143-release` into `my-call (test-results-windows-2022-x86_64-msvs-v143-release)`.
 
 **CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. *Output directories*, *build types*, *compilers*, and *generators* are set in the generated presets to ensure consistent CMake invocations across the execution environment. Even if these parameters are defined in the parent preset, the generated user preset overrides them.
 
