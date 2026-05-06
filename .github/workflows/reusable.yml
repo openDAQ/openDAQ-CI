@@ -136,9 +136,9 @@ jobs:
 
           # --- Windows configs ---
 
-          _windows_2025_x86_64_msvs = {
+          _windows_2022_x86_64_msvs = {
               **_base,
-              "runner": "windows-2025",
+              "runner": "windows-2022",
               "generator": "Visual Studio 17 2022",
               "package-managers": ["choco", "winget", "pip"],
               "pip-install-default": ["cmake"],
@@ -147,8 +147,8 @@ jobs:
           # --- Jobs configs ---
 
           jobs_cfg = {
-              "windows-2025-x86_64-msvs-v143-debug":        {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
-              "windows-2025-x86-msvs-v143-release":         {**_windows_2025_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
+              "windows-2022-x86_64-msvs-v143-debug":        {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Debug" },
+              "windows-2022-x86-msvs-v143-release":         {**_windows_2022_x86_64_msvs,   "toolset": "v143",                            "build-type": "Release",  "target-arch": "x86" },
 
               "ubuntu-20.04-x86_64-ninja-gcc-7-release":    {**_ubuntu_20_04_x86_64_ninja,  "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7"]},
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
