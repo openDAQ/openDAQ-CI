@@ -182,7 +182,7 @@ The pattern components and their values are listed in the platform naming table:
 | windows-2022 | x86 | msvs | v143 | release |
 | windows-2022 | x86_64 | ninja | clang | release |
 | windows-2022 | x86_64 | ninja | intel-cc | release |
-| ubuntu-20.04 | x86_64 | ninja | gcc-7 | release |
+| ubuntu-20.04 | x86 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
