@@ -29,14 +29,23 @@ endif()
 # opendaq-cmake-utils: triplet detection, package naming, staging sidecar.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/StagingBootstrap.cmake")
 
-# core and module install + export themselves; this monolithic build wires them
-# in-tree (no find_package) and packages the whole tree as one umbrella staging.
-add_subdirectory(core)
+# How the module gets hello-core:
+#   OFF (dev/monolith) - build core in-tree; the module links the in-tree target.
+#   ON  (build against staging) - skip core; the module find_package()s hello-core
+#       from a staging on CMAKE_PREFIX_PATH (the build-once / consume path).
+option(HELLO_USE_INSTALLED_CORE
+       "Resolve hello-core via find_package (installed/staged) instead of building it in-tree" OFF)
+
+if (NOT HELLO_USE_INSTALLED_CORE)
+    add_subdirectory(core)
+endif ()
 add_subdirectory(modules/hello)
 
-# Umbrella staging: TGZ tarball over everything core/module installed + sidecar.
+# Staging: TGZ over what was installed + sidecar. Package name comes from
+# OPENDAQ_PACKAGE_NAME_OVERRIDE (a caller cache var) > lowercase PROJECT_NAME,
+# so the umbrella dev build is "hello" and the module build sets "hello-module".
 opendaq_detect_triplet()
-opendaq_generate_package_name(VERSION "${PROJECT_VERSION}" NAME "hello")
+opendaq_generate_package_name(VERSION "${PROJECT_VERSION}")
 opendaq_write_staging_meta(VERSION "${PROJECT_VERSION}"
                            OUTPUT "${CMAKE_BINARY_DIR}/staging-meta.json")
 
