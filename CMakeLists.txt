@@ -14,6 +14,12 @@ project(hello VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Auto-export all symbols on Windows so the SHARED core/module libs need no
+# __declspec annotations; colocate runtime outputs so the test exe finds the
+# core/module DLLs next to it at runtime.
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 option(HELLO_ENABLE_TESTS "Enable testing" ${PROJECT_IS_TOP_LEVEL})
 
 if (HELLO_ENABLE_TESTS)
@@ -21,29 +27,14 @@ if (HELLO_ENABLE_TESTS)
 endif()
 
 # opendaq-cmake-utils: triplet detection, package naming, staging sidecar.
-# SOURCE_SUBDIR points at a non-existent dir so MakeAvailable only downloads and
-# does NOT run cmake-utils' own CMakeLists (it installs mode-guarded function
-# overrides we don't want); we include just the packaging module.
-include(FetchContent)
-FetchContent_Declare(
-    opendaq-cmake-utils
-    GIT_REPOSITORY https://github.com/openDAQ/opendaq-cmake-utils.git
-    GIT_TAG        ci/staging
-    SOURCE_SUBDIR  _download_only_
-)
-FetchContent_MakeAvailable(opendaq-cmake-utils)
-list(APPEND CMAKE_MODULE_PATH "${opendaq-cmake-utils_SOURCE_DIR}/cmake")
-include(openDAQPackagingUtils)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/StagingBootstrap.cmake")
 
+# core and module install + export themselves; this monolithic build wires them
+# in-tree (no find_package) and packages the whole tree as one umbrella staging.
+add_subdirectory(core)
 add_subdirectory(modules/hello)
 
-# Packaging: TGZ tarball + staging-meta.json sidecar
-install(TARGETS hello
-        ARCHIVE DESTINATION lib
-        LIBRARY DESTINATION lib
-        RUNTIME DESTINATION bin)
-install(FILES modules/hello/src/hello.h DESTINATION include)
-
+# Umbrella staging: TGZ tarball over everything core/module installed + sidecar.
 opendaq_detect_triplet()
 opendaq_generate_package_name(VERSION "${PROJECT_VERSION}" NAME "hello")
 opendaq_write_staging_meta(VERSION "${PROJECT_VERSION}"

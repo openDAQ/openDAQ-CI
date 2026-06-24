@@ -1,12 +1,17 @@
 #include <gtest/gtest.h>
-#include "hello.h"
+#include <sstream>
+#include "hello_module.h"
 
-TEST(HelloTest, ReturnsHelloWorld)
+TEST(HelloTest, PrintsHelloWorld)
 {
-    EXPECT_EQ(hello(), "Hello, World!");
+    std::ostringstream os;
+    print_hello(os);
+    EXPECT_EQ(os.str(), "Hello, World!");
 }
 
 TEST(HelloTest, AlwaysFails)
 {
-    EXPECT_EQ(hello(), "This will fail");
+    std::ostringstream os;
+    print_hello(os);
+    EXPECT_EQ(os.str(), "This will fail");
 }
