@@ -1,0 +1,97 @@
+name: Test Staging CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stage-core:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      include-jobs: >-
+        [
+          "ubuntu-24.04-x86_64-ninja-gcc-14-release",
+          "windows-2022-x86_64-msvs-v143-debug",
+          "macos-15-x86_64-ninja-appleclang-release"
+        ]
+      cmake-presets: >-
+        [
+          {
+            "match-jobs": ["*"], 
+            "configure-preset": "module-no-tests", 
+            "build-targets": ["hello-core"],
+            "cache-variables": 
+            {
+              "OPENDAQ_PACKAGE_NAME_OVERRIDE": "hello-core"
+            }
+          }
+        ]
+      packaging: >-
+        [
+          {
+            "match-jobs": ["*"], 
+            "enable-staging": true,
+            "variables": 
+            {
+              "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", 
+              "CPACK_COMPONENTS_ALL": "core"
+            }
+          }
+        ]
+      upload-pattern: core-*
+
+  stage-module:
+    needs: stage-core
+    uses: ./.github/workflows/reusable.yml
+    with:
+      include-jobs: >-
+        [
+          "ubuntu-24.04-x86_64-ninja-gcc-14-release",
+          "windows-2022-x86_64-msvs-v143-debug",
+          "macos-15-x86_64-ninja-appleclang-release"
+        ]
+      cmake-presets: >-
+        [
+          {
+            "match-jobs": ["*"],
+            "configure-preset": "module-no-tests",
+            "cache-variables":
+            {
+              "HELLO_USE_INSTALLED_CORE": "ON",
+              "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps",
+              "OPENDAQ_PACKAGE_NAME_OVERRIDE": "hello-module"
+            }
+          }
+        ]
+      packages: >-
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "artifacts": [{ "name": "core-staging-ubuntu-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["windows-*"],
+            "artifacts": [{ "name": "core-staging-windows-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["macos-*"],
+            "artifacts": [{ "name": "core-staging-macos-*", "dir": "staging-deps" }]
+          }
+        ]
+      packaging: >-
+        [
+          {
+            "match-jobs": ["*"],
+            "enable-staging": true,
+            "variables":
+            {
+              "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON",
+              "CPACK_COMPONENTS_ALL": "module"
+            }
+          }
+        ]
+      upload-pattern: module-*
