@@ -27,11 +27,12 @@ set_target_properties(hello-module PROPERTIES
     CXX_STANDARD_REQUIRED ON
     WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+# Tagged COMPONENT module so a staging build can scope the tarball to it.
 install(TARGETS hello-module
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES src/hello_module.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT module
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT module
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT module)
+install(FILES src/hello_module.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT module)
 
 if (HELLO_ENABLE_TESTS)
     add_subdirectory(tests)
@@ -41,5 +42,5 @@ endif()
 # the whole tree itself).
 if (PROJECT_IS_TOP_LEVEL)
     include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/StagingBootstrap.cmake")
-    opendaq_setup_packaging(VERSION "${PROJECT_VERSION}")  # -> hello-module staging TGZ + sidecar
+    opendaq_setup_packaging(VERSION "${PROJECT_VERSION}")  # -> hello-module staging TGZ + metadata
 endif()
