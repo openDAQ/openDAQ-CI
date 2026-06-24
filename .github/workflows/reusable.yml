@@ -640,6 +640,20 @@ jobs:
         id: build
         run: cmake --build --preset ${{ matrix.name }}
 
+      - name: Stage
+        id: stage
+        run: cpack -G TGZ -C "${{ matrix.build-type }}" --config build/output/CPackConfig.cmake -B build/output
+
+      - name: Upload staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-${{ matrix.name }}
+          path: |
+            build/output/*.tar.gz
+            build/output/staging-meta.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Setup GTest
         id: setup-gtest
         if: matrix.enable-tests
