@@ -31,6 +31,10 @@ on:
         description: 'JSON array of timeout configs, e.g. [{"match-jobs": ["*"], "timeout-minutes": 180}]'
         type: string
         default: '[]'
+      packaging:
+        description: 'JSON array of packaging configs, e.g. [{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]'
+        type: string
+        default: '[]'
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -60,6 +64,7 @@ jobs:
           cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
           timeout_configs = json.loads(r"""${{ inputs.timeout }}""")
+          packaging_configs = json.loads(r"""${{ inputs.packaging }}""")
 
           print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
@@ -321,6 +326,16 @@ jobs:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
+              # resolve packaging for this job (last-match-wins)
+              enable_staging = False
+              package_gen = ""
+              for req in packaging_configs:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      enable_staging = req.get("enable-staging", enable_staging)
+                      package_gen = req.get("package", package_gen)
+              staging_artifact = upload_pattern.replace("*", f"staging-{job_name}") if enable_staging else ""
+              package_artifact = upload_pattern.replace("*", f"package-{job_name}") if package_gen else ""
+
               setup_msvc_toolchain = cfg.get("setup-msvc-toolchain", False)
 
               # Materialize PPA-setup command (only when apt is supported and any PPA is requested)
@@ -371,6 +386,10 @@ jobs:
                   "cmd-ctest-priv": cmd_run_tests_priv,
                   "python-version": python_version,
                   "python-arch": python_arch,
+                  "enable-staging": enable_staging,
+                  "package": package_gen,
+                  "staging-artifact": staging_artifact,
+                  "package-artifact": package_artifact,
                   **install_cmds,
               })
 
@@ -392,7 +411,7 @@ jobs:
           print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
 
           build_dir = "build/output"
-          user_presets = {"version": 4, "configurePresets": [], "buildPresets": [], "testPresets": []}
+          user_presets = {"version": 6, "configurePresets": [], "buildPresets": [], "testPresets": [], "packagePresets": []}
 
           for entry in matrix:
               name = entry["name"]
@@ -403,6 +422,8 @@ jobs:
               architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
               cc = entry.get("cc") or ""
               cxx = entry.get("cxx") or ""
+              enable_staging = entry.get("enable-staging") or False
+              package_gen = entry.get("package") or ""
 
               # find matching cmake-presets config
               configure_preset = ""
@@ -442,6 +463,25 @@ jobs:
                       "inherits": [test_preset],
                       **({"configuration": build_type} if build_type else {}),
                       "output": {"outputOnFailure": True},
+                  })
+
+              # package presets: TGZ staging and/or the native installer, each to its own dir.
+              # `configurations` selects the build type for multi-config (VS) generators.
+              if enable_staging:
+                  user_presets["packagePresets"].append({
+                      "name": f"{name}-staging",
+                      "configurePreset": name,
+                      "generators": ["TGZ"],
+                      "packageDirectory": "$" + "{sourceDir}" + "/build/staging",
+                      **({"configurations": [build_type]} if build_type else {}),
+                  })
+              if package_gen:
+                  user_presets["packagePresets"].append({
+                      "name": f"{name}-package",
+                      "configurePreset": name,
+                      "generators": [package_gen],
+                      "packageDirectory": "$" + "{sourceDir}" + "/build/package",
+                      **({"configurations": [build_type]} if build_type else {}),
                   })
 
           with open("CMakeUserPresets.json", "w") as f:
@@ -642,15 +682,31 @@ jobs:
 
       - name: Stage
         id: stage
-        run: cpack -G TGZ -C "${{ matrix.build-type }}" --config build/output/CPackConfig.cmake -B build/output
+        if: matrix.enable-staging
+        run: cpack --preset ${{ matrix.name }}-staging
 
       - name: Upload staging
+        if: matrix.enable-staging
         uses: actions/upload-artifact@v7
         with:
-          name: staging-${{ matrix.name }}
+          name: ${{ matrix.staging-artifact }}
           path: |
-            build/output/*.tar.gz
+            build/staging/*
             build/output/staging-meta.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Package
+        id: package
+        if: matrix.package != ''
+        run: cpack --preset ${{ matrix.name }}-package
+
+      - name: Upload package
+        if: matrix.package != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.package-artifact }}
+          path: build/package/*
           if-no-files-found: error
           retention-days: 7
 

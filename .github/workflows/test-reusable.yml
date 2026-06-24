@@ -14,6 +14,7 @@ jobs:
     with:
       cmake-presets: '[{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}, {"match-jobs": ["*-x86-*"], "cache-variables": {"HELLO_FORCE_COMPILE_32BIT": "ON"}}]'
       packages: '[{"match-jobs": ["*-x86-*"], "apt-install": ["linux-libc-dev:i386"]}]'
+      packaging: '[{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]'
       upload-pattern: 'test-full-*'
 
   test-exclude:
