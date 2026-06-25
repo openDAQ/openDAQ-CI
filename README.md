@@ -220,16 +220,21 @@ The pattern components and their values are listed in the platform naming table:
 | os | arch | generator | compiler | build_type |
 |----|------|-----------|----------|------------|
 | windows-2022 | x86_64 | msvs | v143 | debug |
+| windows-2022 | x86_64 | msvs | v143 | release |
 | windows-2022 | x86 | msvs | v143 | release |
 | windows-2022 | x86_64 | ninja | clang | release |
 | windows-2022 | x86_64 | ninja | intel-cc | release |
 | ubuntu-20.04 | x86 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
+| ubuntu-22.04 | x86_64 | ninja | gcc | release |
+| ubuntu-22.04 | armv8 | ninja | gcc | release |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
 | ubuntu-24.04 | x86_64 | ninja | clang-18 | release |
 | ubuntu-24.04 | x86_64 | ninja | intel-cc | release |
+| manylinux_2_28 | x86_64 | ninja | gcc | release |
 | macos-26 | x86_64 | ninja | appleclang | debug |
+| macos-26 | x86_64 | ninja | appleclang | release |
 | macos-26 | armv8 | ninja | appleclang | release |
 | macos-15 | x86_64 | ninja | appleclang | release |
 
