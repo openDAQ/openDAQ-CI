@@ -856,6 +856,16 @@ jobs:
             echo ""
             echo "# $(s ${{ steps.build.outcome }}) Build:"
             echo "cmake --build --preset ${{ matrix.name }}"
+            if [ "${{ matrix.enable-staging }}" = "true" ]; then
+              echo ""
+              echo "# $(s ${{ steps.stage.outcome }}) Stage:"
+              echo "cpack --preset ${{ matrix.name }}-staging"
+            fi
+            if [ -n "${{ matrix.package }}" ]; then
+              echo ""
+              echo "# $(s ${{ steps.package.outcome }}) Package:"
+              echo "cpack --preset ${{ matrix.name }}-package"
+            fi
             echo ""
             if [ "${{ steps.test.outcome }}" = "skipped" ]; then
               echo "# $(s ${{ steps.test.outcome }}) Test skipped"
