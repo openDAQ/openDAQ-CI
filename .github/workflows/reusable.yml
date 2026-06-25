@@ -90,16 +90,19 @@ jobs:
               "cmd-winget-envs": [],
               "cmd-pip-envs": [],
               "fmt-apt-install": "{sudo} {envs} apt-get -o Acquire::Retries=5 install -y --no-install-recommends {pkgs}",
+              "fmt-yum-install": "{sudo} {envs} yum install -y {pkgs}",
               "fmt-pip-install": "python{ver}{arch} -m pip install {pkgs}",
               "fmt-brew-install": "{envs} brew install {pkgs}",
               "fmt-choco-install": "{envs} choco install -y {pkgs}",
               "fmt-winget-install": "{envs} winget install --accept-source-agreements --accept-package-agreements --id {pkgs}",
               "apt-install-default": [],
+              "yum-install-default": [],
               "brew-install-default": [],
               "choco-install-default": [],
               "winget-install-default": [],
               "pip-install-default": [],
               "apt-install": [],
+              "yum-install": [],
               "brew-install": [],
               "choco-install": [],
               "winget-install": [],
@@ -145,6 +148,19 @@ jobs:
               "fmt-pip-install": "python{ver}{arch} -m pip install --break-system-packages {pkgs}",
               "allow-python-ppa": True,
           }
+
+          # --- manylinux configs (yum; default image compiler, as wheels are built) ---
+
+          _manylinux_2_28_x86_64_ninja = {
+              **_base,
+              "runner": "ubuntu-latest",
+              "image": "quay.io/pypa/manylinux_2_28_x86_64",
+              "bootstrap": "yum install -y git",
+              "package-managers": ["yum", "pip"],
+              "cmd-sudo": "",
+              "generator": "Ninja",
+          }
+
           # --- macOS configs ---
 
           _macos_ninja = {
@@ -216,6 +232,8 @@ jobs:
               "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
               "ubuntu-24.04-x86_64-ninja-intel-cc-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "icx",        "cxx": "icpx",            "build-type": "Release",  "setup-intel-cc": "linux-intel-cc"},
+
+              "manylinux_2_28-x86_64-ninja-gcc-release":    {**_manylinux_2_28_x86_64_ninja,                                            "build-type": "Release" },
 
               "macos-26-x86_64-ninja-appleclang-debug":     {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Debug"},
               "macos-26-armv8-ninja-appleclang-release":    {**_macos_26_armv8_ninja,       **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
@@ -630,6 +648,10 @@ jobs:
         if: matrix.cmd-install-apt != ''
         run: ${{ matrix.cmd-install-apt }}
 
+      - name: Install dependencies (yum)
+        if: matrix.cmd-install-yum != ''
+        run: ${{ matrix.cmd-install-yum }}
+
       - name: Install dependencies (brew)
         if: matrix.cmd-install-brew != ''
         run: ${{ matrix.cmd-install-brew }}
@@ -644,7 +666,7 @@ jobs:
 
       - name: Setup Python (GitHub Actions)
         if: matrix.image == '' && matrix.python-version != ''
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.python-arch }}
