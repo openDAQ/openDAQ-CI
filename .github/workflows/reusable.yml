@@ -142,6 +142,10 @@ jobs:
           _ubuntu_20_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:20.04" }
           _ubuntu_20_04_x86_ninja = { **_ubuntu_guest_x86_ninja, "image": "ubuntu:20.04" }
 
+          # arm64 image variant is pulled automatically on the ARM runner; arch is detected.
+          _ubuntu_22_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:22.04" }
+          _ubuntu_22_04_armv8_ninja  = { **_ubuntu_22_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
+
           _ubuntu_24_04_x86_64_ninja = {
               **_ubuntu_guest_x86_64_ninja,
               "image": "ubuntu:24.04",
@@ -227,6 +231,9 @@ jobs:
 
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_ninja,     "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"] },
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
+
+              "ubuntu-22.04-x86_64-ninja-gcc-release":      {**_ubuntu_22_04_x86_64_ninja,  "cc": "gcc",        "cxx": "g++",             "build-type": "Release",  "apt-install": ["gcc", "g++"] },
+              "ubuntu-22.04-armv8-ninja-gcc-release":       {**_ubuntu_22_04_armv8_ninja,   "cc": "gcc",        "cxx": "g++",             "build-type": "Release",  "apt-install": ["gcc", "g++"] },
 
               "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
