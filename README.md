@@ -21,6 +21,8 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
     - [Additional Packages](#additional-packages)
     - [Post-Package Command](#post-package-command)
     - [Python Version](#python-version)
+    - [Build Stagings and Installers](#build-stagings-and-installers)
+    - [Consume Stagings](#consume-stagings)
     - [Rename Artifacts](#rename-artifacts)
 - [License](#license)
 
@@ -66,6 +68,11 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #   use-python-version — specific Python version (optional, last match wins)
     #                        e.g. "3.12"; pip install uses this interpreter
     #   run                — run after packages setup (optional, last match wins)
+    #   artifacts          — dependency stagings to consume (optional, collect)
+    #                        each entry {name, dir}: name is a download-artifact glob,
+    #                        dir is the extract target; downloaded and extracted before
+    #                        configure so the build resolves them via find_package
+    #                        (point CMAKE_PREFIX_PATH at dir via cmake-presets)
     # Optional: [] empty, no extra packages
     # Example: >
     #   [
@@ -97,6 +104,8 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #   match-jobs       — job names list (optional: ["*"] default)
     #   configure-preset — configure preset name (mostly required)
     #                      inherited, toolchains and build type are ignored
+    #   build-targets    — targets to build instead of all (optional, last match wins)
+    #                      list of target names; sets the build preset's `targets`
     #   test-preset      — test preset name (optional)
     #                      if omitted, tests will not run for matched jobs
     #   run-tests-priv   — run ctest with elevated privileges (optional, last match wins)
@@ -122,6 +131,38 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #     }
     #   ]
     cmake-presets: ''
+
+    # Generate CPack presets per job (staging tarball and/or native installer).
+    # Format: JSON array of objects
+    # Fields:
+    #   match-jobs     — job names list (optional: ["*"] default)
+    #   enable-staging — produce a TGZ staging tarball (optional bool, last match wins)
+    #                    uploaded as `staging-<job>`
+    #   package        — cpack generator for a native installer (optional, last match wins)
+    #                    e.g. "DEB" / "NSIS" / "productbuild"; uploaded as `package-<job>`
+    #   variables      — extra CPack variables (optional, dict, merged across matches)
+    #                    e.g. component scoping: CPACK_COMPONENTS_ALL, CPACK_*_COMPONENT_INSTALL
+    #   package-preset — project packagePreset for the generated base to inherit (optional, last match wins)
+    # The package name is set via cmake-presets cache-variables (OPENDAQ_PACKAGE_NAME_OVERRIDE),
+    # not here.
+    # Optional: [] empty, no packaging
+    # Example: >
+    #   [
+    #     {
+    #       "match-jobs": ["*"],
+    #       "enable-staging": true,
+    #       "variables": {
+    #         "CPACK_COMPONENTS_ALL": "core",
+    #         "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON"
+    #       }
+    #     },
+    #     {
+    #       "match-jobs": ["ubuntu-*"],
+    #       "package": "DEB",
+    #       "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" }
+    #     }
+    #   ]
+    cpack-presets: ''
 
     # Artifact names pattern, `*` is replaced with original name.
     # Use to avoid conflicts when calling reusable.yml multiple times within the same workflow.
@@ -204,13 +245,15 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Exclude filtering.** After include filtering, each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix.
 
-**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed.
+**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed. The `artifacts` field lists dependency stagings to consume — for each entry, every artifact matching the `name` glob is downloaded and extracted into `dir` before the configure step, so the build resolves the staged dependencies via `find_package`; the caller points `CMAKE_PREFIX_PATH` at that directory through `cmake-presets` `cache-variables`.
 
-**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS. The `cache-variables` field, if specified, contributes extra CMake cache variables to the generated user preset; values are merged across all matching entries (later matches override earlier ones). The reserved variables `CMAKE_BUILD_TYPE`, `CMAKE_C_COMPILER`, and `CMAKE_CXX_COMPILER` cannot be overridden — they are always set by the generated preset to ensure consistent builds across runners.
+**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS. The `cache-variables` field, if specified, contributes extra CMake cache variables to the generated user preset; values are merged across all matching entries (later matches override earlier ones). The reserved variables `CMAKE_BUILD_TYPE`, `CMAKE_C_COMPILER`, and `CMAKE_CXX_COMPILER` cannot be overridden — they are always set by the generated preset to ensure consistent builds across runners. The `build-targets` field, if specified, restricts the build to the listed targets (last match wins) by setting the generated build preset's `targets`, so a job can build a single target — e.g. one wrapper against an installed core — instead of the whole project.
 
 **Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2022-x86_64-msvs-v143-release` into `my-call (test-results-windows-2022-x86_64-msvs-v143-release)`.
 
 **CMake user presets.** Based on the matrix — specifically build type, compiler, and inherited preset names — the generate stage produces a `CMakeUserPresets.json` file with preset names matching job names. These presets are then used in CMake commands for configuration, building, and running tests. *Output directories*, *build types*, *compilers*, and *generators* are set in the generated presets to ensure consistent CMake invocations across the execution environment. Even if these parameters are defined in the parent preset, the generated user preset overrides them.
+
+**Packaging.** The `cpack-presets` array is resolved per job — last-match-wins for `enable-staging`, `package`, and `package-preset`; `variables` are merged across matches. For each job with packaging enabled, the generate stage adds CPack `packagePresets` to `CMakeUserPresets.json`: a hidden base named after the job (carrying the configure preset, build type, `variables`, and any inherited `package-preset`), and up to two leaves inheriting it — `<job>-staging` (`TGZ` → `build/staging`, when `enable-staging`) and `<job>-package` (the `package` generator → `build/package`). The CI job then runs `cpack --preset <job>-staging` / `<job>-package`, uploading the results as `staging-<job>` / `package-<job>`. `variables` carry CPack settings such as component scoping — `CPACK_COMPONENTS_ALL` plus the per-generator `CPACK_*_COMPONENT_INSTALL` flag — so a single project can stage or package one component.
 
 **Intel C/C++ compiler.** For `intel-cc` jobs, the workflow downloads the Intel oneAPI Base Toolkit web installer from the official Intel CDN (`https://registrationcenter-download.intel.com/`) — `.exe` for Windows, `.sh` (self-extracting archive) for Linux — and installs the C/C++ compiler component (`intel.oneapi.win.cpp-dpcpp-common` / `intel.oneapi.lin.dpcpp-cpp-compiler`). The compiler environment is then sourced via `setvars.bat`/`setvars.sh` and propagated to subsequent steps through `GITHUB_ENV` and `GITHUB_PATH`.
 
@@ -251,11 +294,20 @@ cat > CMakeUserPresets.json <<'EOF'
 <generated-presets>
 EOF
 
+# Download + extract dependency stagings (if packages.artifacts is set)
+# into their target dir, e.g. staging-deps/
+
 # Configure
 cmake --preset <job-name>
 
 # Build
 cmake --build --preset <job-name>
+
+# Stage (if enable-staging via cpack-presets) -> staging-<job> artifact
+cpack --preset <job-name>-staging
+
+# Package (if package generator via cpack-presets) -> package-<job> artifact
+cpack --preset <job-name>-package
 
 # Test (if test preset is passed via cmake-presets input)
 # Prefixed with `sudo -E` if run-tests-priv is enabled for the job
@@ -625,6 +677,74 @@ The workflow installs Python 3.14 on the runner (via `actions/setup-python@v5` o
 **Notes:**
 - The `ubuntu-20.04` runner supports only Python 3.8 (via stock `apt`; `deadsnakes` PPA is not available for this image).
 - The module should expose a configure preset (e.g. `module-python-3.14`) that sets the appropriate CMake variables to use the requested Python version.
+
+#### Build Stagings and Installers
+
+To package the build, use `cpack-presets`. Enable a TGZ staging tarball with `enable-staging`, and/or a native installer with `package` (a cpack generator). Use `variables` to scope the output to a CPack component, and set the package name through `cmake-presets` `cache-variables` (`OPENDAQ_PACKAGE_NAME_OVERRIDE`):
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "cache-variables": { "OPENDAQ_PACKAGE_NAME_OVERRIDE": "my-module" }
+          }
+        ]
+      cpack-presets: >
+        [
+          {
+            "match-jobs": ["*"],
+            "enable-staging": true,
+            "variables": {
+              "CPACK_COMPONENTS_ALL": "module",
+              "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON"
+            }
+          },
+          { "match-jobs": ["ubuntu-*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["windows-*"], "package": "NSIS" },
+          { "match-jobs": ["macos-*"],   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
+        ]
+      packages: >
+        [
+          { "match-jobs": ["windows-*"], "choco-install": ["nsis"] }
+        ]
+```
+
+Every job uploads a `staging-<job>` artifact (the TGZ tarball); each platform also uploads a native installer `package-<job>` — `.deb` on Ubuntu, `.exe` (NSIS) on Windows, `.pkg` (productbuild) on macOS. The package name (`my-module-<version>-<triplet>`) comes from `OPENDAQ_PACKAGE_NAME_OVERRIDE`. NSIS needs `makensis` on the runner, installed here via `packages` `choco-install`.
+
+#### Consume Stagings
+
+To build against a dependency staging (e.g. core, produced by another job or workflow), download and extract it with the `packages` `artifacts` field and point the configure preset at it via `CMAKE_PREFIX_PATH`:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      packages: >
+        [
+          { "match-jobs": ["ubuntu-*"],  "artifacts": [{ "name": "core-staging-ubuntu-*",  "dir": "staging-deps" }] },
+          { "match-jobs": ["windows-*"], "artifacts": [{ "name": "core-staging-windows-*", "dir": "staging-deps" }] },
+          { "match-jobs": ["macos-*"],   "artifacts": [{ "name": "core-staging-macos-*",   "dir": "staging-deps" }] }
+        ]
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module",
+            "cache-variables": { "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps" }
+          }
+        ]
+```
+
+Each entry's `name` is a `download-artifact` glob; every matching artifact is downloaded and extracted into `dir` before configure. With `CMAKE_PREFIX_PATH` pointing at that directory, the project resolves the staged dependency via `find_package` instead of rebuilding it.
+
+Scope the glob with `match-jobs` so each job pulls **only** the staging matching its platform — a broad `"core-staging-*"` would match every platform's artifact and extract them into the same directory, leaving `find_package` with the wrong triplet.
 
 #### Rename Artifacts
 
