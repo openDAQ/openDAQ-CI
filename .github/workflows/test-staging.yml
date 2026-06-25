@@ -30,6 +30,10 @@ jobs:
             }
           }
         ]
+      packages: >-
+        [
+          { "match-jobs": ["windows-*"], "choco-install": ["nsis"] }
+        ]
       cpack-presets: >-
         [
           {
@@ -40,7 +44,10 @@ jobs:
               "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", 
               "CPACK_COMPONENTS_ALL": "core"
             }
-          }
+          },
+          { "match-jobs": ["ubuntu-*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["windows-*"], "package": "NSIS" },
+          { "match-jobs": ["macos-*"],   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
         ]
       upload-pattern: core-*
 
@@ -75,6 +82,7 @@ jobs:
           },
           {
             "match-jobs": ["windows-*"],
+            "choco-install": ["nsis"],
             "artifacts": [{ "name": "core-staging-windows-*", "dir": "staging-deps" }]
           },
           {
@@ -92,6 +100,9 @@ jobs:
               "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON",
               "CPACK_COMPONENTS_ALL": "module"
             }
-          }
+          },
+          { "match-jobs": ["ubuntu-*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["windows-*"], "package": "NSIS" },
+          { "match-jobs": ["macos-*"],   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
         ]
       upload-pattern: module-*
