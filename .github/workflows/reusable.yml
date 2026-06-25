@@ -31,8 +31,8 @@ on:
         description: 'JSON array of timeout configs, e.g. [{"match-jobs": ["*"], "timeout-minutes": 180}]'
         type: string
         default: '[]'
-      packaging:
-        description: 'JSON array of packaging configs, e.g. [{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]. "variables" pass CPack vars into the staging preset, e.g. {"CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core"}.'
+      cpack-presets:
+        description: 'JSON array of cpack preset configs, e.g. [{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]. Per job a hidden base packagePreset is generated, inherited by <job>-staging and <job>-package. "variables" pass CPack vars onto the base; "package-preset" names a project packagePreset for the base to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
         type: string
         default: '[]'
     outputs:
@@ -64,7 +64,7 @@ jobs:
           cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
           timeout_configs = json.loads(r"""${{ inputs.timeout }}""")
-          packaging_configs = json.loads(r"""${{ inputs.packaging }}""")
+          cpack_presets = json.loads(r"""${{ inputs.cpack-presets }}""")
 
           print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
@@ -340,15 +340,17 @@ jobs:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
-              # resolve packaging for this job (last-match-wins)
+              # resolve cpack presets for this job (last-match-wins)
               enable_staging = False
               package_gen = ""
-              staging_variables = {}
-              for req in packaging_configs:
+              package_preset = ""
+              packaging_variables = {}
+              for req in cpack_presets:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       enable_staging = req.get("enable-staging", enable_staging)
                       package_gen = req.get("package", package_gen)
-                      staging_variables.update(req.get("variables", {}))
+                      package_preset = req.get("package-preset", package_preset)
+                      packaging_variables.update(req.get("variables", {}))
               staging_artifact = upload_pattern.replace("*", f"staging-{job_name}") if enable_staging else ""
               package_artifact = upload_pattern.replace("*", f"package-{job_name}") if package_gen else ""
 
@@ -414,7 +416,8 @@ jobs:
                   "package": package_gen,
                   "staging-artifact": staging_artifact,
                   "package-artifact": package_artifact,
-                  "staging-variables": json.dumps(staging_variables),
+                  "packaging-variables": json.dumps(packaging_variables),
+                  "package-preset": package_preset,
                   "consume-artifacts": json.dumps(consume_artifacts),
                   "consume-pattern": consume_pattern,
                   **install_cmds,
@@ -453,7 +456,8 @@ jobs:
               cxx = entry.get("cxx") or ""
               enable_staging = entry.get("enable-staging") or False
               package_gen = entry.get("package") or ""
-              staging_variables = json.loads(entry.get("staging-variables") or "{}")
+              package_preset = entry.get("package-preset") or ""
+              packaging_variables = json.loads(entry.get("packaging-variables") or "{}")
 
               # find matching cmake-presets config
               configure_preset = ""
@@ -498,24 +502,32 @@ jobs:
                       "output": {"outputOnFailure": True},
                   })
 
-              # package presets: TGZ staging and/or the native installer, each to its own dir.
-              # `configurations` selects the build type for multi-config (VS) generators.
+              # package presets: a hidden base per job (configurePreset + variables, optionally
+              # inheriting a project packagePreset) shared by <job>-staging (TGZ) and
+              # <job>-package (native installer). `configurations` selects the build type for
+              # multi-config (VS) generators.
+              if enable_staging or package_gen:
+                  user_presets["packagePresets"].append({
+                      "name": name,
+                      "hidden": True,
+                      "configurePreset": name,
+                      **({"inherits": [package_preset]} if package_preset else {}),
+                      **({"configurations": [build_type]} if build_type else {}),
+                      **({"variables": packaging_variables} if packaging_variables else {}),
+                  })
               if enable_staging:
                   user_presets["packagePresets"].append({
                       "name": f"{name}-staging",
-                      "configurePreset": name,
+                      "inherits": [name],
                       "generators": ["TGZ"],
                       "packageDirectory": "$" + "{sourceDir}" + f"/{staging_dir}",
-                      **({"configurations": [build_type]} if build_type else {}),
-                      **({"variables": staging_variables} if staging_variables else {}),
                   })
               if package_gen:
                   user_presets["packagePresets"].append({
                       "name": f"{name}-package",
-                      "configurePreset": name,
+                      "inherits": [name],
                       "generators": [package_gen],
                       "packageDirectory": "$" + "{sourceDir}" + f"/{package_dir}",
-                      **({"configurations": [build_type]} if build_type else {}),
                   })
 
           with open("CMakeUserPresets.json", "w") as f:

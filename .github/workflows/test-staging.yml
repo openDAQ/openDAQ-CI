@@ -30,7 +30,7 @@ jobs:
             }
           }
         ]
-      packaging: >-
+      cpack-presets: >-
         [
           {
             "match-jobs": ["*"], 
@@ -82,7 +82,7 @@ jobs:
             "artifacts": [{ "name": "core-staging-macos-*", "dir": "staging-deps" }]
           }
         ]
-      packaging: >-
+      cpack-presets: >-
         [
           {
             "match-jobs": ["*"],
