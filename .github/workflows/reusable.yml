@@ -798,10 +798,27 @@ jobs:
           retention-days: 7
 
       - name: Job summary
-        if: failure()
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
+          emit_meta() {  # $1 = dir label, $2 = staging-meta.json path
+            [ -f "$2" ] || return 0
+            {
+              echo "<details><summary>📦 $1/staging-meta.json</summary>"
+              echo ""
+              echo '```json'
+              cat "$2"
+              echo ""
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          [ "${{ matrix.enable-staging }}" = "true" ] && emit_meta staging "${{ matrix.staging-dir }}/staging-meta.json"
+          [ "${{ matrix.package }}" != "" ] && emit_meta package "${{ matrix.package-dir }}/staging-meta.json"
+          [ "${{ job.status }}" = "failure" ] || exit 0
           {
             echo "<details><summary>❌ ${{ matrix.name }}</summary>"
             echo ""
