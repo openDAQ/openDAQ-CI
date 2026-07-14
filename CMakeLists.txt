@@ -47,7 +47,8 @@ add_subdirectory(modules/hello)
 opendaq_detect_triplet()
 opendaq_generate_package_name(VERSION "${PROJECT_VERSION}")
 opendaq_write_staging_meta(VERSION "${PROJECT_VERSION}"
-                           OUTPUT "${CMAKE_BINARY_DIR}/staging-meta.json")
+                           OUTPUT "${CMAKE_BINARY_DIR}/staging-meta.json"
+                           COMPONENTS core module)
 
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_PACKAGE_FILE_NAME "${OPENDAQ_PACKAGE_NAME}")
