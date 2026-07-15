@@ -9,7 +9,7 @@ if (NOT COMMAND opendaq_setup_packaging)
     FetchContent_Declare(
         opendaq-cmake-utils
         GIT_REPOSITORY https://github.com/openDAQ/opendaq-cmake-utils.git
-        GIT_TAG        ci/staging
+        GIT_TAG        v1.0.2
         SOURCE_SUBDIR  _download_only_
     )
     FetchContent_MakeAvailable(opendaq-cmake-utils)
