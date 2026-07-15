@@ -16,11 +16,11 @@ on:
         type: string
         default: '[]'
       packages:
-        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]'
+        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]. May also pull dependency stagings: "artifacts": [{"name": "core-staging-*", "dir": "staging-deps"}] (* -> job name; extracted into dir before configure).'
         type: string
         default: '[]'
       cmake-presets:
-        description: 'JSON array of preset configs, e.g. [{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
+        description: 'JSON array of preset configs, e.g. [{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test", "build-targets": ["hello-core"]}]'
         type: string
         default: '[]'
       upload-pattern:
@@ -29,6 +29,10 @@ on:
         default: '*'
       timeout:
         description: 'JSON array of timeout configs, e.g. [{"match-jobs": ["*"], "timeout-minutes": 180}]'
+        type: string
+        default: '[]'
+      cpack-presets:
+        description: 'JSON array of cpack preset configs, e.g. [{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]. Per job a hidden base packagePreset is generated, inherited by <job>-staging and <job>-package. "variables" pass CPack vars onto the base; "package-preset" names a project packagePreset for the base to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
         type: string
         default: '[]'
     outputs:
@@ -60,6 +64,7 @@ jobs:
           cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           upload_pattern = """${{ inputs.upload-pattern }}"""
           timeout_configs = json.loads(r"""${{ inputs.timeout }}""")
+          cpack_presets = json.loads(r"""${{ inputs.cpack-presets }}""")
 
           print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
@@ -223,6 +228,10 @@ jobs:
           def matches_any(name, patterns):
               return any(fnmatch(name, p) for p in patterns)
 
+          # output dirs shared across presets + ci steps (single source of truth)
+          build_dir = "build/output"     # configure preset binaryDir
+          staging_dir = "build/staging"  # cpack staging tarball output
+          package_dir = "build/package"  # cpack native installer output
           matrix = []
           for job_name, cfg in jobs_cfg.items():
               sudo = cfg.get("cmd-sudo") or ""
@@ -250,9 +259,11 @@ jobs:
 
               supported_pms = set(cfg.get("package-managers", []))
 
-              # collect user packages, run command, and python request for this job
+              # collect user packages, run command, python request, and dependency
+              # staging artifacts to consume for this job
               user_pkgs = {}
               python_version = ""
+              consume_artifacts = []
               for req in user_packages:
                   if not matches_any(job_name, req.get("match-jobs", ["*"])):
                       continue
@@ -266,6 +277,14 @@ jobs:
                       user_pkgs.setdefault(k, []).extend(v)
                   user_pkgs["run"] = req.get("run", user_pkgs.get("run", ""))
                   python_version = req.get("use-python-version", python_version)
+
+                  # staging deps: artifact name (a download-artifact glob, used
+                  # verbatim) extracted into 'dir'; match-jobs scopes it per job
+                  for art in req.get("artifacts", []):
+                      consume_artifacts.append({
+                          "name": art["name"],
+                          "dir": art.get("dir", "staging-deps"),
+                      })
 
               # Python via apt: deadsnakes (+ ensurepip) on allow-python-ppa configs, else system repos.
               cmd_ensurepip = ""
@@ -321,6 +340,25 @@ jobs:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
+              # resolve cpack presets for this job (last-match-wins)
+              enable_staging = False
+              package_gen = ""
+              package_preset = ""
+              packaging_variables = {}
+              for req in cpack_presets:
+                  if matches_any(job_name, req.get("match-jobs", ["*"])):
+                      enable_staging = req.get("enable-staging", enable_staging)
+                      package_gen = req.get("package", package_gen)
+                      package_preset = req.get("package-preset", package_preset)
+                      packaging_variables.update(req.get("variables", {}))
+              staging_artifact = upload_pattern.replace("*", f"staging-{job_name}") if enable_staging else ""
+              package_artifact = upload_pattern.replace("*", f"package-{job_name}") if package_gen else ""
+
+              # download-artifact pattern scoping the consume step to this job's deps
+              consume_names = [a["name"] for a in consume_artifacts]
+              consume_pattern = consume_names[0] if len(consume_names) == 1 else (
+                  "{" + ",".join(consume_names) + "}" if consume_names else "")
+
               setup_msvc_toolchain = cfg.get("setup-msvc-toolchain", False)
 
               # Materialize PPA-setup command (only when apt is supported and any PPA is requested)
@@ -350,6 +388,9 @@ jobs:
                   "name": job_name,
                   "runner": runner,
                   "image": image,
+                  "build-dir": build_dir,
+                  "staging-dir": staging_dir,
+                  "package-dir": package_dir,
                   "container-options": cfg.get("container-options") or "",
                   "bootstrap": cfg.get("bootstrap") or "",
                   "generator": cfg["generator"],
@@ -371,6 +412,14 @@ jobs:
                   "cmd-ctest-priv": cmd_run_tests_priv,
                   "python-version": python_version,
                   "python-arch": python_arch,
+                  "enable-staging": enable_staging,
+                  "package": package_gen,
+                  "staging-artifact": staging_artifact,
+                  "package-artifact": package_artifact,
+                  "packaging-variables": json.dumps(packaging_variables),
+                  "package-preset": package_preset,
+                  "consume-artifacts": json.dumps(consume_artifacts),
+                  "consume-pattern": consume_pattern,
                   **install_cmds,
               })
 
@@ -391,11 +440,13 @@ jobs:
 
           print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
 
-          build_dir = "build/output"
-          user_presets = {"version": 4, "configurePresets": [], "buildPresets": [], "testPresets": []}
+          user_presets = {"version": 6, "configurePresets": [], "buildPresets": [], "testPresets": [], "packagePresets": []}
 
           for entry in matrix:
               name = entry["name"]
+              build_dir = entry["build-dir"]
+              staging_dir = entry["staging-dir"]
+              package_dir = entry["package-dir"]
               build_type = entry.get("build-type") or ""
               generator = entry.get("generator") or ""
               toolset = entry.get("toolset") or ""
@@ -403,16 +454,22 @@ jobs:
               architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
               cc = entry.get("cc") or ""
               cxx = entry.get("cxx") or ""
+              enable_staging = entry.get("enable-staging") or False
+              package_gen = entry.get("package") or ""
+              package_preset = entry.get("package-preset") or ""
+              packaging_variables = json.loads(entry.get("packaging-variables") or "{}")
 
               # find matching cmake-presets config
               configure_preset = ""
               test_preset = ""
               cache_vars = {}
+              build_targets = []
               for entry in cmake_presets:
                   if any(fnmatch(name, p) for p in entry.get("match-jobs", ["*"])):
                       configure_preset = entry.get("configure-preset", configure_preset)
                       test_preset = entry.get("test-preset", test_preset)
                       cache_vars.update(entry.get("cache-variables", {}))
+                      build_targets = entry.get("build-targets", build_targets)
 
               user_presets["configurePresets"].append({
                   "name": name,
@@ -433,6 +490,7 @@ jobs:
                   "name": name,
                   "configurePreset": name,
                   **({"configuration": build_type} if build_type else {}),
+                  **({"targets": build_targets} if build_targets else {}),
               })
 
               if test_preset:
@@ -442,6 +500,34 @@ jobs:
                       "inherits": [test_preset],
                       **({"configuration": build_type} if build_type else {}),
                       "output": {"outputOnFailure": True},
+                  })
+
+              # package presets: a hidden base per job (configurePreset + variables, optionally
+              # inheriting a project packagePreset) shared by <job>-staging (TGZ) and
+              # <job>-package (native installer). `configurations` selects the build type for
+              # multi-config (VS) generators.
+              if enable_staging or package_gen:
+                  user_presets["packagePresets"].append({
+                      "name": name,
+                      "hidden": True,
+                      "configurePreset": name,
+                      **({"inherits": [package_preset]} if package_preset else {}),
+                      **({"configurations": [build_type]} if build_type else {}),
+                      **({"variables": packaging_variables} if packaging_variables else {}),
+                  })
+              if enable_staging:
+                  user_presets["packagePresets"].append({
+                      "name": f"{name}-staging",
+                      "inherits": [name],
+                      "generators": ["TGZ"],
+                      "packageDirectory": "$" + "{sourceDir}" + f"/{staging_dir}",
+                  })
+              if package_gen:
+                  user_presets["packagePresets"].append({
+                      "name": f"{name}-package",
+                      "inherits": [name],
+                      "generators": [package_gen],
+                      "packageDirectory": "$" + "{sourceDir}" + f"/{package_dir}",
                   })
 
           with open("CMakeUserPresets.json", "w") as f:
@@ -632,6 +718,30 @@ jobs:
                   if os.environ.get(k) != v:
                       f.write(f"{k}={v}\n")
 
+      - name: Download dependency stagings
+        if: matrix.consume-artifacts != '[]'
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ${{ matrix.consume-pattern }}   # only this job's deps -> under build/.artifacts
+          path: build/.artifacts
+
+      - name: Extract dependency stagings
+        if: matrix.consume-artifacts != '[]'
+        shell: python3 {0}
+        run: |
+          import json, tarfile, glob, os
+          arts = json.loads(r'''${{ matrix.consume-artifacts }}''')
+          # download-artifact lays the (already pattern-scoped) deps flat under
+          # build/.artifacts, so match tarballs anywhere under it.
+          tarballs = glob.glob('build/.artifacts/**/*.tar.gz', recursive=True)
+          if not tarballs:
+              raise SystemExit("::error::no staging dependency tarballs were downloaded")
+          for a in arts:
+              os.makedirs(a["dir"], exist_ok=True)
+              for t in tarballs:
+                  tarfile.open(t).extractall(a["dir"])
+                  print(f"extracted {t} -> {a['dir']}/")
+
       - name: Configure
         id: configure
         run: cmake --preset ${{ matrix.name }}
@@ -639,6 +749,38 @@ jobs:
       - name: Build
         id: build
         run: cmake --build --preset ${{ matrix.name }}
+
+      - name: Stage
+        id: stage
+        if: matrix.enable-staging
+        run: cpack --preset ${{ matrix.name }}-staging
+
+      - name: Upload staging
+        if: matrix.enable-staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.staging-artifact }}
+          path: |
+            ${{ matrix.staging-dir }}
+            !${{ matrix.staging-dir }}/_CPack_Packages/**
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Package
+        id: package
+        if: matrix.package != ''
+        run: cpack --preset ${{ matrix.name }}-package
+
+      - name: Upload package
+        if: matrix.package != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.package-artifact }}
+          path: |
+            ${{ matrix.package-dir }}
+            !${{ matrix.package-dir }}/_CPack_Packages/**
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Setup GTest
         id: setup-gtest
@@ -668,10 +810,27 @@ jobs:
           retention-days: 7
 
       - name: Job summary
-        if: failure()
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
+          emit_meta() {  # $1 = dir label, $2 = staging-meta.json path
+            [ -f "$2" ] || return 0
+            {
+              echo "<details><summary>📦 $1/staging-meta.json</summary>"
+              echo ""
+              echo '```json'
+              cat "$2"
+              echo ""
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          [ "${{ matrix.enable-staging }}" = "true" ] && emit_meta staging "${{ matrix.staging-dir }}/staging-meta.json"
+          [ "${{ matrix.package }}" != "" ] && emit_meta package "${{ matrix.package-dir }}/staging-meta.json"
+          [ "${{ job.status }}" = "failure" ] || exit 0
           {
             echo "<details><summary>❌ ${{ matrix.name }}</summary>"
             echo ""
@@ -697,6 +856,16 @@ jobs:
             echo ""
             echo "# $(s ${{ steps.build.outcome }}) Build:"
             echo "cmake --build --preset ${{ matrix.name }}"
+            if [ "${{ matrix.enable-staging }}" = "true" ]; then
+              echo ""
+              echo "# $(s ${{ steps.stage.outcome }}) Stage:"
+              echo "cpack --preset ${{ matrix.name }}-staging"
+            fi
+            if [ -n "${{ matrix.package }}" ]; then
+              echo ""
+              echo "# $(s ${{ steps.package.outcome }}) Package:"
+              echo "cpack --preset ${{ matrix.name }}-package"
+            fi
             echo ""
             if [ "${{ steps.test.outcome }}" = "skipped" ]; then
               echo "# $(s ${{ steps.test.outcome }}) Test skipped"
