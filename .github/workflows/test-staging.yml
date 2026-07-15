@@ -14,15 +14,19 @@ jobs:
     with:
       include-jobs: >-
         [
-          "ubuntu-24.04-x86_64-ninja-gcc-14-release",
-          "windows-2022-x86_64-msvs-v143-debug",
-          "macos-15-x86_64-ninja-appleclang-release"
+          "ubuntu-22.04-x86_64-ninja-gcc-release",
+          "ubuntu-22.04-armv8-ninja-gcc-release",
+          "manylinux_2_28-x86_64-ninja-gcc-release",
+          "windows-2022-x86_64-msvs-v143-release",
+          "windows-2022-x86-msvs-v143-release",
+          "macos-26-x86_64-ninja-appleclang-release",
+          "macos-26-armv8-ninja-appleclang-release"
         ]
       cmake-presets: >-
         [
           {
-            "match-jobs": ["*"], 
-            "configure-preset": "module-no-tests", 
+            "match-jobs": ["*"],
+            "configure-preset": "module-no-tests",
             "build-targets": ["hello-core"],
             "cache-variables": 
             {
@@ -57,9 +61,13 @@ jobs:
     with:
       include-jobs: >-
         [
-          "ubuntu-24.04-x86_64-ninja-gcc-14-release",
-          "windows-2022-x86_64-msvs-v143-debug",
-          "macos-15-x86_64-ninja-appleclang-release"
+          "ubuntu-22.04-x86_64-ninja-gcc-release",
+          "ubuntu-22.04-armv8-ninja-gcc-release",
+          "manylinux_2_28-x86_64-ninja-gcc-release",
+          "windows-2022-x86_64-msvs-v143-release",
+          "windows-2022-x86-msvs-v143-release",
+          "macos-26-x86_64-ninja-appleclang-release",
+          "macos-26-armv8-ninja-appleclang-release"
         ]
       cmake-presets: >-
         [
@@ -77,17 +85,34 @@ jobs:
       packages: >-
         [
           {
-            "match-jobs": ["ubuntu-*"],
-            "artifacts": [{ "name": "core-staging-ubuntu-*", "dir": "staging-deps" }]
+            "match-jobs": ["ubuntu-22.04-x86_64-*"],
+            "artifacts": [{ "name": "core-staging-ubuntu-22.04-x86_64-*", "dir": "staging-deps" }]
           },
           {
-            "match-jobs": ["windows-*"],
+            "match-jobs": ["ubuntu-22.04-armv8-*"],
+            "artifacts": [{ "name": "core-staging-ubuntu-22.04-armv8-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["windows-2022-x86_64-*"],
             "choco-install": ["nsis"],
-            "artifacts": [{ "name": "core-staging-windows-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "core-staging-windows-2022-x86_64-*", "dir": "staging-deps" }]
           },
           {
-            "match-jobs": ["macos-*"],
-            "artifacts": [{ "name": "core-staging-macos-*", "dir": "staging-deps" }]
+            "match-jobs": ["windows-2022-x86-*"],
+            "choco-install": ["nsis"],
+            "artifacts": [{ "name": "core-staging-windows-2022-x86-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["macos-26-x86_64-*"],
+            "artifacts": [{ "name": "core-staging-macos-26-x86_64-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["macos-26-armv8-*"],
+            "artifacts": [{ "name": "core-staging-macos-26-armv8-*", "dir": "staging-deps" }]
+          },
+          {
+            "match-jobs": ["manylinux*"],
+            "artifacts": [{ "name": "core-staging-manylinux*", "dir": "staging-deps" }]
           }
         ]
       cpack-presets: >-
