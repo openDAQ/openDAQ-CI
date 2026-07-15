@@ -12,7 +12,8 @@ jobs:
   test-full:
     uses: ./.github/workflows/reusable.yml
     with:
-      cmake-presets: '[{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}]'
+      cmake-presets: '[{"match-jobs": ["*"], "configure-preset": "module", "test-preset": "module-test"}, {"match-jobs": ["*-x86-*"], "cache-variables": {"HELLO_FORCE_COMPILE_32BIT": "ON"}}]'
+      packages: '[{"match-jobs": ["*-x86-*"], "apt-install": ["linux-libc-dev:i386"]}]'
       upload-pattern: 'test-full-*'
 
   test-exclude:
