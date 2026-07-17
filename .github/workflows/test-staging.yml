@@ -1,8 +1,10 @@
 name: Test Staging CI
 
+# Exercises the staging chain end to end on every PR: stage hello-core, stage hello-module on
+# top of it, then publish all four packages to ghcr under the test channel. The push writes to
+# the registry, so it only ever runs here, on pull_request.
 on:
   pull_request:
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,9 +51,10 @@ jobs:
               "CPACK_COMPONENTS_ALL": "core"
             }
           },
-          { "match-jobs": ["ubuntu-*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
-          { "match-jobs": ["windows-*"], "package": "NSIS" },
-          { "match-jobs": ["macos-*"],   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
+          { "match-jobs": ["ubuntu-*"],    "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["manylinux*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["windows-*"],   "package": "NSIS" },
+          { "match-jobs": ["macos-*"],     "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
         ]
       upload-pattern: core-*
 
@@ -126,8 +129,24 @@ jobs:
               "CPACK_COMPONENTS_ALL": "module"
             }
           },
-          { "match-jobs": ["ubuntu-*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
-          { "match-jobs": ["windows-*"], "package": "NSIS" },
-          { "match-jobs": ["macos-*"],   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
+          { "match-jobs": ["ubuntu-*"],    "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["manylinux*"],  "package": "DEB",          "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON" } },
+          { "match-jobs": ["windows-*"],   "package": "NSIS" },
+          { "match-jobs": ["macos-*"],     "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON" } }
         ]
       upload-pattern: module-*
+
+  push:
+    needs: [stage-core, stage-module]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/staging-push.yml
+    with:
+      staging-packages: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core",     "artifacts": ["core-staging-*"],     "tags": ["latest"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-core",   "artifacts": ["core-package-*"],     "tags": ["latest"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-module",   "artifacts": ["module-staging-*"],   "tags": ["latest"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-module", "artifacts": ["module-package-*"],   "tags": ["latest"] }
+        ]
