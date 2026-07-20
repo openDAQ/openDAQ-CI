@@ -1,0 +1,117 @@
+name: Staging Pull
+
+# Resolves requested staging packages in an OCI registry (ghcr) to digests, pulls them as
+# tarballs, and uploads each set as a deps artifact (tarballs + manifest.json) for a build to
+# consume. The mirror of staging-push: push writes children under a path; pull selects a child
+# by its descriptor annotations and fetches it by digest.
+#
+# Selection is by annotation globs -- org.opencontainers.image.title (the file name, always
+# there) and any com.opendaq.* (there when the staging carried staging-meta.json). A request
+# with no match is "not found" and fails; every match is pulled, but two pulled artifacts may
+# not share a file name -- they would clobber each other in the dir, so that fails loudly.
+#
+# One matrix job per entry uploads one artifact, so a build consumes its own deps by name.
+on:
+  workflow_call:
+    inputs:
+      staging-artifacts:
+        description: |-
+          JSON array of staging artifacts to materialize; each entry becomes one uploaded artifact:
+          [
+            {
+              "artifact": "staging-<job>",                  // the artifact name to upload
+              "packages": [                                  // one or more children to pull into it
+                {
+                  "path": "ghcr.io/<org>/path/to/package",   // the package to resolve
+                  "tag": "latest",                           // which index version
+                  "annotations": {                           // glob filters; every matching child is pulled
+                    "org.opencontainers.image.title": "*-x86_64-linux-gcc-11-release.tar.gz"
+                  }
+                }
+              ]
+            }
+          ]
+        type: string
+        required: true
+
+jobs:
+  pull:
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(inputs.staging-artifacts) }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Resolve and pull
+        shell: python3 {0}
+        env:
+          ENTRY: ${{ toJSON(matrix.entry) }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          import json, os, subprocess, sys, fnmatch
+
+          entry    = json.loads(os.environ["ENTRY"])
+          token    = os.environ["TOKEN"]
+          actor    = os.environ["ACTOR"]
+          packages = entry["packages"]
+
+          def run(cmd, err, **kw):
+              print("+ " + " ".join(cmd), flush=True)
+              r = subprocess.run(cmd, text=True, capture_output=True, **kw)
+              if r.stderr: print(r.stderr, end="")
+              if r.returncode != 0:
+                  sys.exit(f"::error::{err}")
+              return r
+
+          hosts = {p["path"].rstrip("/").split("/")[0].lower() for p in packages}
+          for host in sorted(hosts):
+              run(["oras", "login", host, "-u", actor, "--password-stdin"],
+                  f"login failed for {host}", input=token)
+
+          out = os.path.abspath("out")
+          os.makedirs(out, exist_ok=True)
+          resolved = []
+          pulled   = {}   # file name -> source, to catch two artifacts clobbering each other
+          for p in packages:
+              path = p["path"].rstrip("/").lower()
+              tag  = p["tag"]
+              want = p["annotations"]
+
+              r = run(["oras", "manifest", "fetch", f"{path}:{tag}"],
+                      f"failed to fetch the index for {path}:{tag}")
+              children = json.loads(r.stdout).get("manifests", [])
+
+              matches = [c for c in children
+                         if all(fnmatch.fnmatch(c.get("annotations", {}).get(k, ""), pat)
+                                for k, pat in want.items())]
+              if not matches:
+                  seen = [c.get("annotations", {}).get("org.opencontainers.image.title", c["digest"])
+                          for c in children]
+                  sys.exit(f"::error::no child of {path}:{tag} matched {want}; available: {seen}")
+
+              for child in matches:
+                  digest = child["digest"]
+                  title  = child.get("annotations", {}).get("org.opencontainers.image.title", digest)
+                  if title in pulled:
+                      sys.exit(f"::error::two artifacts share the file name {title!r}: "
+                               f"{pulled[title]} and {path}@{digest}")
+                  pulled[title] = f"{path}@{digest}"
+                  run(["oras", "pull", f"{path}@{digest}", "-o", out],
+                      f"failed to pull {path}@{digest}")
+                  resolved.append({"path": path, "tag": tag, "digest": digest,
+                                   "title": title, "annotations": child.get("annotations", {})})
+                  print(f"resolved {path}:{tag} -> {title} ({digest})")
+
+          json.dump(resolved, open(os.path.join(out, "manifest.json"), "w"), indent=2)
+
+      - name: Upload deps
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.entry.artifact }}
+          path: out

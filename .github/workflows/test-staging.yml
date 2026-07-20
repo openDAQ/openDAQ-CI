@@ -1,8 +1,9 @@
 name: Test Staging CI
 
-# Exercises the staging chain end to end on every PR: stage hello-core, stage hello-module on
-# top of it, then publish all four packages to ghcr under the test channel. The push writes to
-# the registry, so it only ever runs here, on pull_request.
+# Exercises the whole staging chain on every PR: stage hello-core and push it to ghcr, then pull
+# it back by digest, build hello-module against the pulled core, and push the module. This is the
+# real pull -> build -> push path -- the module never sees the core except through the registry.
+# The push writes to the registry, so this workflow only ever runs on pull_request.
 on:
   pull_request:
 
@@ -30,7 +31,7 @@ jobs:
             "match-jobs": ["*"],
             "configure-preset": "module-no-tests",
             "build-targets": ["hello-core"],
-            "cache-variables": 
+            "cache-variables":
             {
               "OPENDAQ_PACKAGE_NAME_OVERRIDE": "hello-core"
             }
@@ -43,11 +44,11 @@ jobs:
       cpack-presets: >-
         [
           {
-            "match-jobs": ["*"], 
+            "match-jobs": ["*"],
             "enable-staging": true,
-            "variables": 
+            "variables":
             {
-              "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", 
+              "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON",
               "CPACK_COMPONENTS_ALL": "core"
             }
           },
@@ -58,8 +59,39 @@ jobs:
         ]
       upload-pattern: core-*
 
-  stage-module:
+  push-core:
     needs: stage-core
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/staging-push.yml
+    with:
+      staging-packages: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core",   "artifacts": ["core-staging-*"], "tags": ["latest"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-core", "artifacts": ["core-package-*"], "tags": ["latest"] }
+        ]
+
+  pull-core:
+    needs: push-core
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/staging-pull.yml
+    with:
+      staging-artifacts: >-
+        [
+          { "artifact": "dep-core-ubuntu-22.04-x86_64-ninja-gcc-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "linux",           "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-ubuntu-22.04-armv8-ninja-gcc-release",      "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "linux",           "com.opendaq.settings.arch": "armv8"  } }] },
+          { "artifact": "dep-core-manylinux_2_28-x86_64-ninja-gcc-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "manylinux_2_28", "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-windows-2022-x86_64-msvs-v143-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "windows",         "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-windows-2022-x86-msvs-v143-release",        "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "windows",         "com.opendaq.settings.arch": "x86"    } }] },
+          { "artifact": "dep-core-macos-26-x86_64-ninja-appleclang-release",  "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-macos-26-armv8-ninja-appleclang-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "armv8"  } }] }
+        ]
+
+  stage-module:
+    needs: pull-core
     uses: ./.github/workflows/reusable.yml
     with:
       include-jobs: >-
@@ -89,33 +121,33 @@ jobs:
         [
           {
             "match-jobs": ["ubuntu-22.04-x86_64-*"],
-            "artifacts": [{ "name": "core-staging-ubuntu-22.04-x86_64-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-ubuntu-22.04-x86_64-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["ubuntu-22.04-armv8-*"],
-            "artifacts": [{ "name": "core-staging-ubuntu-22.04-armv8-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-ubuntu-22.04-armv8-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["windows-2022-x86_64-*"],
             "choco-install": ["nsis"],
-            "artifacts": [{ "name": "core-staging-windows-2022-x86_64-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-windows-2022-x86_64-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["windows-2022-x86-*"],
             "choco-install": ["nsis"],
-            "artifacts": [{ "name": "core-staging-windows-2022-x86-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-windows-2022-x86-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["macos-26-x86_64-*"],
-            "artifacts": [{ "name": "core-staging-macos-26-x86_64-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-macos-26-x86_64-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["macos-26-armv8-*"],
-            "artifacts": [{ "name": "core-staging-macos-26-armv8-*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-macos-26-armv8-*", "dir": "staging-deps" }]
           },
           {
             "match-jobs": ["manylinux*"],
-            "artifacts": [{ "name": "core-staging-manylinux*", "dir": "staging-deps" }]
+            "artifacts": [{ "name": "dep-core-manylinux*", "dir": "staging-deps" }]
           }
         ]
       cpack-presets: >-
@@ -136,8 +168,8 @@ jobs:
         ]
       upload-pattern: module-*
 
-  push:
-    needs: [stage-core, stage-module]
+  push-module:
+    needs: stage-module
     permissions:
       contents: read
       packages: write
@@ -145,8 +177,6 @@ jobs:
     with:
       staging-packages: >-
         [
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core",     "artifacts": ["core-staging-*"],     "tags": ["latest"] },
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-core",   "artifacts": ["core-package-*"],     "tags": ["latest"] },
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-module",   "artifacts": ["module-staging-*"],   "tags": ["latest"] },
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-module", "artifacts": ["module-package-*"],   "tags": ["latest"] }
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-module",   "artifacts": ["module-staging-*"], "tags": ["latest"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-module", "artifacts": ["module-package-*"], "tags": ["latest"] }
         ]
