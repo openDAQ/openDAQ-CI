@@ -1,0 +1,132 @@
+name: Staging Cleanup
+
+# Prunes aged staging packages from an OCI registry (ghcr). For each caller-given path, any
+# index published longer ago than its retention is removed -- through the index: fetch it, delete
+# its children by digest, then delete the index itself. NEVER "delete untagged versions": the
+# live children are untagged too, so pruning only ever goes via an index.
+#
+# Point this at the paths a repo owns (e.g. its nightly channel); a release channel is simply a
+# path you never clean -- no per-item protection is needed. An index that stays current keeps
+# being republished, so it never ages out under normal publishing.
+on:
+  workflow_call:
+    inputs:
+      staging-retentions:
+        description: |-
+          JSON array of paths to prune with their retention window:
+          [
+            {
+              "path": "ghcr.io/<org>/path/to/package",   // the package to prune
+              "retention": { "days": 14 }                // keep this long; unset fields are 0
+            }
+          ]
+          retention is days + hours + minutes summed; an index older than that is pruned. A zero
+          window prunes nothing (the entry is skipped) -- retention 0 is never "delete all".
+        type: string
+        required: true
+      dry-run:
+        description: "Log what would be pruned without deleting."
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Prune
+        shell: python3 {0}
+        env:
+          RETENTIONS: ${{ inputs.staging-retentions }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          import json, os, subprocess, sys, urllib.request, urllib.parse, urllib.error
+          from datetime import datetime, timezone, timedelta
+
+          retentions = json.loads(os.environ["RETENTIONS"])
+          token      = os.environ["TOKEN"]
+          actor      = os.environ["ACTOR"]
+          dry        = os.environ["DRY_RUN"] == "true"
+          now        = datetime.now(timezone.utc)
+
+          def gh(method, url):
+              req = urllib.request.Request(url, method=method)
+              req.add_header("Authorization", f"Bearer {token}")
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      body = r.read()
+                      return r.status, (json.loads(body) if body else None)
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(errors="replace")
+
+          def versions(org, name):
+              out, page = [], 1
+              while True:
+                  st, data = gh("GET", f"https://api.github.com/orgs/{org}/packages/container/{name}"
+                                       f"/versions?per_page=100&page={page}")
+                  if st != 200:
+                      sys.exit(f"::error::listing versions failed ({st}) for {org}/{name}: {data}")
+                  out += data
+                  if len(data) < 100: break
+                  page += 1
+              return out
+
+          def children(ref):
+              r = subprocess.run(["oras", "manifest", "fetch", ref], text=True, capture_output=True)
+              if r.returncode != 0:
+                  sys.exit(f"::error::oras manifest fetch {ref} failed: {r.stderr}")
+              return [m["digest"] for m in json.loads(r.stdout).get("manifests", [])]
+
+          hosts = {e["path"].split("/")[0].lower() for e in retentions}
+          for host in sorted(hosts):
+              r = subprocess.run(["oras", "login", host, "-u", actor, "--password-stdin"],
+                                 input=token, text=True, capture_output=True)
+              if r.returncode != 0:
+                  sys.exit(f"::error::login failed for {host}: {r.stderr}")
+
+          for e in retentions:
+              path = e["path"].rstrip("/").lower()
+              _, org, *rest = path.split("/")
+              name = urllib.parse.quote("/".join(rest), safe="")
+              ret  = e["retention"]
+              window = timedelta(days=ret.get("days", 0), hours=ret.get("hours", 0),
+                                 minutes=ret.get("minutes", 0))
+              if window.total_seconds() <= 0:
+                  print(f"::warning::{path}: zero retention, skipping")
+                  continue
+              cutoff = now - window
+
+              vers      = versions(org, name)
+              by_digest = {v["name"]: v["id"] for v in vers}
+              indexes   = [v for v in vers if v.get("metadata", {}).get("container", {}).get("tags")]
+
+              pruned = 0
+              for idx in indexes:
+                  created = datetime.strptime(idx["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                  if created >= cutoff:
+                      continue
+                  tags   = idx["metadata"]["container"]["tags"]
+                  digest = idx["name"]
+                  kids   = [by_digest[c] for c in children(f"{path}@{digest}") if c in by_digest]
+                  age    = now - created
+                  print(f"{'[dry-run] ' if dry else ''}prune {path} {digest} "
+                        f"(tags {tags}, age {age.days}d) + {len(kids)} children")
+                  if not dry:
+                      # children first, then the index: a re-run heals a partial failure
+                      for cid in kids:
+                          st, _ = gh("DELETE", f"https://api.github.com/orgs/{org}/packages/container/{name}/versions/{cid}")
+                          if st not in (204, 404):
+                              sys.exit(f"::error::deleting child {cid} failed ({st})")
+                      st, _ = gh("DELETE", f"https://api.github.com/orgs/{org}/packages/container/{name}/versions/{idx['id']}")
+                      if st not in (204, 404):
+                          sys.exit(f"::error::deleting index {digest} failed ({st})")
+                  pruned += 1
+              print(f"{path}: {pruned} of {len(indexes)} indexes pruned")

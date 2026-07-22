@@ -1,0 +1,27 @@
+name: Test Cleanup CI
+
+# Exercises staging-cleanup against the throwaway test/* packages the other test workflows
+# publish. Runs on pull_request (workflow_dispatch needs the workflow on the default branch).
+# Starts as a dry-run: it lists versions and fetches manifests but deletes nothing.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    permissions:
+      packages: write
+    uses: ./.github/workflows/staging-cleanup.yml
+    with:
+      dry-run: true
+      staging-retentions: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core",     "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-core",   "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-module",   "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-module", "retention": { "hours": 1 } }
+        ]
