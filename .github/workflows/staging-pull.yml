@@ -61,18 +61,23 @@ jobs:
           actor    = os.environ["ACTOR"]
           packages = entry["packages"]
 
-          def run(cmd, err, **kw):
+          def run(cmd, err, fatal=True, **kw):
               print("+ " + " ".join(cmd), flush=True)
               r = subprocess.run(cmd, text=True, capture_output=True, **kw)
               if r.stderr: print(r.stderr, end="")
               if r.returncode != 0:
-                  sys.exit(f"::error::{err}")
+                  if fatal:
+                      sys.exit(f"::error::{err}")
+                  print(f"::warning::{err}")
               return r
 
+          # login is best-effort: public packages pull anonymously and a fork PR has only a
+          # read-only token, so warn and carry on rather than failing the pull
           hosts = {p["path"].rstrip("/").split("/")[0].lower() for p in packages}
           for host in sorted(hosts):
               run(["oras", "login", host, "-u", actor, "--password-stdin"],
-                  f"login failed for {host}", input=token)
+                  f"login failed for {host}; continuing (public packages pull anonymously)",
+                  fatal=False, input=token)
 
           out = os.path.abspath("out")
           os.makedirs(out, exist_ok=True)
