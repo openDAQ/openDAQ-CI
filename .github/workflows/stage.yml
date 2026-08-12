@@ -1,0 +1,78 @@
+name: Stage
+
+# The `stage` facade composes the three primitives into one publish flow:
+#
+#   staging-pull (optional) -> reusable (build / stage / test) -> staging-push (optional)
+#
+# Each side is gated by emptiness: no `staging-pull` -> no pull; no `staging-push` -> no push,
+# and the staging stays a run artifact (the PR / integration path). A flat facade -- it calls
+# the primitives directly, never another facade. Self-checkout only: a repo builds itself.
+on:
+  workflow_call:
+    inputs:
+      staging-pull:
+        description: "staging-pull `deps`: packages to pull from ghcr before the build (empty -> no pull)."
+        type: string
+        default: '[]'
+      include-jobs:
+        description: "reusable `include-jobs`."
+        type: string
+        default: '["*"]'
+      cmake-presets:
+        description: "reusable `cmake-presets`."
+        type: string
+        default: '[]'
+      cpack-presets:
+        description: "reusable `cpack-presets`."
+        type: string
+        default: '[]'
+      packages:
+        description: "reusable `packages`: build deps and consuming the pulled stagings."
+        type: string
+        default: '[]'
+      upload-pattern:
+        description: "reusable `upload-pattern`."
+        type: string
+        default: '*'
+      timeout:
+        description: "reusable `timeout`."
+        type: string
+        default: '[]'
+      staging-push:
+        description: "staging-push `stagings`: packages to publish to ghcr after the build (empty -> no push)."
+        type: string
+        default: '[]'
+
+jobs:
+  pull:
+    if: ${{ inputs.staging-pull != '[]' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/staging-pull.yml
+    with:
+      staging-artifacts: ${{ inputs.staging-pull }}
+
+  build:
+    needs: pull
+    if: ${{ always() && needs.pull.result != 'failure' && needs.pull.result != 'cancelled' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable.yml
+    with:
+      include-jobs: ${{ inputs.include-jobs }}
+      cmake-presets: ${{ inputs.cmake-presets }}
+      cpack-presets: ${{ inputs.cpack-presets }}
+      packages: ${{ inputs.packages }}
+      upload-pattern: ${{ inputs.upload-pattern }}
+      timeout: ${{ inputs.timeout }}
+
+  push:
+    needs: build
+    if: ${{ always() && needs.build.result == 'success' && inputs.staging-push != '[]' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/staging-push.yml
+    with:
+      staging-packages: ${{ inputs.staging-push }}
