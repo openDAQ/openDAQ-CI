@@ -1,0 +1,212 @@
+name: Staging Push
+
+# Publishes the run's staging artifacts to an OCI registry (ghcr), under the paths the caller
+# chose.
+#
+# One package per path -- the tag points at an OCI index, and the outputs are its untagged
+# children: unreachable by name until the index lands, so a set publishes atomically, and the
+# registry refuses an index with a dangling reference.
+#
+#   ghcr.io/opendaq/nightly/staging/opendaq : <sha>, <short-sha>, latest
+#     └─ sha256:index…
+#        ├─ sha256:a1…  title=opendaq-x86_64-linux-gcc-11-release.tar.gz
+#        │              com.opendaq: platform=linux    settings.arch=x86_64  settings.compiler=gcc   settings.compiler.version=11
+#        └─ sha256:b2…  title=opendaq-x86_64-windows-msvc-143-release.tar.gz
+#                       com.opendaq: platform=windows  settings.arch=x86_64  settings.compiler=msvc  settings.compiler.version=194
+#
+# A child is named by its file; the com.opendaq.* annotations are optional, and buy a consumer a
+# resolve by settings rather than by file name.
+#
+# NEVER prune "untagged versions" of these packages -- the live children are untagged too.
+# Pruning goes through the index only.
+on:
+  workflow_call:
+    inputs:
+      staging-packages:
+        description: |-
+          JSON array of publish targets:
+          [
+            {
+              "path": "ghcr.io/<org>/path/to/staging",   // the package, in full
+              "artifacts": ["staging-*"],                // globs; each match becomes a child of its index
+              "tags": ["latest", "v1.2.3"]               // extra tags; <sha> and <short-sha> are automatic
+            },
+            {                                            // one entry per kind: a tarball and a .deb are
+              "path": "ghcr.io/<org>/path/to/package",   // variants of nothing, so they never share
+              "artifacts": ["package-*"]                 // an index
+            }
+          ]
+        type: string
+        required: true
+
+jobs:
+  push:
+    name: Push
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Download stagings
+        uses: actions/download-artifact@v7
+        with:
+          path: .artifacts
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Push
+        shell: python3 {0}
+        env:
+          STAGINGS: ${{ inputs.staging-packages }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          import json, os, glob, subprocess, sys
+          from datetime import datetime, timezone
+
+          stagings = json.loads(os.environ["STAGINGS"])
+          token    = os.environ["TOKEN"]
+          actor    = os.environ["ACTOR"]
+          sha      = os.environ["SHA"]
+          short    = sha[:7]
+          repo     = os.environ["REPO"]
+          server   = os.environ["SERVER_URL"]
+          created  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")   # push time; staging-cleanup ages by this
+
+          PACKAGE_TYPE = "application/vnd.opendaq.package.v1"
+          INDEX_TYPE   = "application/vnd.opendaq.index.v1"   # what is inside: see the descriptors
+
+          # The registry UI offers `docker pull` for anything it hosts, so both say what they are
+          # and how to actually get a package out.
+          INDEX_DESC = """Package manifest.
+          1) oras manifest fetch {base}:<commit>
+          2) pick an entry of manifests[] by its com.opendaq.* annotations
+          3) oras pull {base}@<entry.digest>"""
+
+          PACKAGE_DESC = """Package.
+          oras pull {base}@<digest>"""
+
+          # The kind of a package is the path the caller chose; this is only its format.
+          MEDIA = {
+              ".tar.gz": "application/gzip",
+              ".zip":    "application/zip",
+              ".deb":    "application/vnd.debian.binary-package",
+              ".rpm":    "application/x-rpm",
+              ".exe":    "application/vnd.microsoft.portable-executable",
+              ".msi":    "application/x-msi",
+              ".pkg":    "application/octet-stream",
+              ".dmg":    "application/octet-stream",
+          }
+
+          def run(cmd, err, **kw):
+              print("+ " + " ".join(cmd), flush=True)
+              r = subprocess.run(cmd, text=True, capture_output=True, **kw)
+              if r.stdout: print(r.stdout, end="")
+              if r.stderr: print(r.stderr, end="")
+              if r.returncode != 0:
+                  sys.exit(f"::error::{err}")
+              return r
+
+          hosts = {staging["path"].rstrip("/").split("/")[0].lower() for staging in stagings}
+          for host in sorted(hosts):
+              run(["oras", "login", host, "-u", actor, "--password-stdin"],
+                  f"login failed for {host}", input=token)
+
+          published = []
+          for staging in stagings:
+              base = staging["path"].rstrip("/").lower()   # OCI repositories are lowercase
+              tags = list(dict.fromkeys([sha, short] + staging.get("tags", [])))
+              dirs = sorted({d for g in staging["artifacts"]
+                               for d in glob.glob(f".artifacts/{g}") if os.path.isdir(d)})
+              if not dirs:
+                  sys.exit(f"::error::no artifacts matched {staging['artifacts']}")
+
+              layout_dir = os.path.abspath(".oci/" + base.replace("/", "_"))
+              digest_ann = {}
+              names      = []
+
+              # each artifact becomes an annotated manifest in a local layout
+              for adir in dirs:
+                  artifact = os.path.basename(adir)
+
+                  # an artifact holds one payload plus, optionally, staging-meta.json
+                  files = [f for f in sorted(os.listdir(adir))
+                           if f != "staging-meta.json" and os.path.isfile(os.path.join(adir, f))]
+                  if len(files) != 1:
+                      sys.exit(f"::error::expected one payload in {artifact}, found {len(files)}: {files}")
+                  fname = files[0]
+                  names.append(fname)
+
+                  meta_file = os.path.join(adir, "staging-meta.json")
+                  meta      = json.load(open(meta_file)) if os.path.exists(meta_file) else None
+
+                  def flatten(obj, prefix, out):
+                      for k, v in obj.items():
+                          key = f"{prefix}.{k}"
+                          if isinstance(v, dict):
+                              flatten(v, key, out)
+                          elif v not in (None, ""):
+                              out[key] = str(v)
+                      return out
+
+                  ann = flatten(meta, "com.opendaq", {}) if meta else {}
+
+                  ext   = ".tar.gz" if fname.endswith(".tar.gz") else os.path.splitext(fname)[1].lower()
+                  media = MEDIA.get(ext, "application/octet-stream")
+
+                  ann["org.opencontainers.image.title"]       = fname
+                  ann["org.opencontainers.image.description"] = PACKAGE_DESC.format(base=base)
+
+                  args = []
+                  for k, v in ann.items():
+                      args += ["-a", f"{k}={v}"]
+
+                  r = run(["oras", "push", "--oci-layout", f"{layout_dir}:{artifact}",
+                           "--artifact-type", PACKAGE_TYPE, f"{fname}:{media}", *args,
+                           "--format", "go-template={{.digest}}"],
+                          f"failed to build the manifest for {fname}", cwd=adir)
+                  digest_ann[r.stdout.strip()] = ann
+
+              # the index: oras leaves descriptors bare, so carry the annotations ourselves
+              run(["oras", "manifest", "index", "create", "--oci-layout", f"{layout_dir}:tmp",
+                   *digest_ann, "-o", "skeleton.json"],
+                  f"failed to assemble the index for {base}")
+
+              # Annotations only, no `platform`: it cannot express the compiler, so gcc-11 and
+              # gcc-14 would share one and a docker-style client would silently pick either.
+              index = json.load(open("skeleton.json"))
+              for desc in index["manifests"]:
+                  desc["annotations"] = digest_ann[desc["digest"]]
+              index["artifactType"] = INDEX_TYPE
+
+              index["annotations"] = {
+                  "org.opencontainers.image.created":     created,
+                  "org.opencontainers.image.description": INDEX_DESC.format(base=base),
+                  "org.opencontainers.image.revision":    sha,
+                  "org.opencontainers.image.source":      f"{server}/{repo}",
+              }
+              json.dump(index, open("index.json", "w"), separators=(",", ":"))
+              run(["oras", "manifest", "push", "--oci-layout", f"{layout_dir}:index", "index.json",
+                   "--media-type", "application/vnd.oci.image.index.v1+json"],
+                  f"failed to store the index for {base}")
+
+              # one copy publishes index + children; the children land untagged
+              run(["oras", "cp", "--from-oci-layout", f"{layout_dir}:index",
+                   base + ":" + ",".join(tags)],
+                  f"failed to publish {base}")
+
+              published.append((base, tags, names))
+              print(f"published {base} ({len(names)} packages)")
+
+          gs = os.environ.get("GITHUB_STEP_SUMMARY")
+          if gs and published:
+              with open(gs, "a") as f:
+                  f.write("### Published packages\n\n")
+                  for base, tags, names in published:
+                      f.write(f"- `{base}`\n")
+                      f.write(f"  - tags: {', '.join('`' + t + '`' for t in tags)}\n")
+                      for name in names:
+                          f.write(f"  - `{name}`\n")
