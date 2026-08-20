@@ -50,21 +50,21 @@ jobs:
           {
             "match-jobs": ["*"],
             "stagings": [
-              { "name": "core",   "variables": { "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "variables": { "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
+              { "name": "core",   "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
+              { "name": "module", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
             ]
           },
           { "match-jobs": ["ubuntu-*", "manylinux*"], "installers": [
-              { "name": "core",   "package": "DEB", "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "package": "DEB", "variables": { "CPACK_DEB_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
+              { "name": "core",   "package": "DEB", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_DEB_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
+              { "name": "module", "package": "DEB", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_DEB_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
           ] },
           { "match-jobs": ["windows-*"], "installers": [
-              { "name": "core",   "package": "NSIS", "variables": { "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "package": "NSIS", "variables": { "CPACK_COMPONENTS_ALL": "module" } }
+              { "name": "core",   "package": "NSIS", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_COMPONENTS_ALL": "core" } },
+              { "name": "module", "package": "NSIS", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_COMPONENTS_ALL": "module" } }
           ] },
           { "match-jobs": ["macos-*"], "installers": [
-              { "name": "core",   "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "package": "productbuild", "variables": { "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
+              { "name": "core",   "package": "productbuild", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
+              { "name": "module", "package": "productbuild", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_PRODUCTBUILD_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
           ] }
         ]
       upload-pattern: hello-*
