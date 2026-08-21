@@ -26,7 +26,8 @@ on:
                   "tag": "latest",                           // which index version
                   "annotations": {                           // glob filters; every matching child is pulled
                     "org.opencontainers.image.title": "*-x86_64-linux-gcc-11-release.tar.gz"
-                  }
+                  },
+                  "optional": false                          // true -> resolving to nothing is a warning
                 }
               ]
             }
@@ -48,6 +49,7 @@ jobs:
         uses: oras-project/setup-oras@v1
 
       - name: Resolve and pull
+        id: pull
         shell: python3 {0}
         env:
           ENTRY: ${{ toJSON(matrix.entry) }}
@@ -84,12 +86,16 @@ jobs:
           resolved = []
           pulled   = {}   # file name -> source, to catch two artifacts clobbering each other
           for p in packages:
-              path = p["path"].rstrip("/").lower()
-              tag  = p["tag"]
-              want = p["annotations"]
+              path     = p["path"].rstrip("/").lower()
+              tag      = p["tag"]
+              want     = p["annotations"]
+              optional = p.get("optional", False)
 
               r = run(["oras", "manifest", "fetch", f"{path}:{tag}"],
-                      f"failed to fetch the index for {path}:{tag}")
+                      f"failed to fetch the index for {path}:{tag}", fatal=not optional)
+              if r.returncode != 0:
+                  print(f"::warning::{path}:{tag} is optional and was not found, skipping")
+                  continue
               children = json.loads(r.stdout).get("manifests", [])
 
               matches = [c for c in children
@@ -98,7 +104,11 @@ jobs:
               if not matches:
                   seen = [c.get("annotations", {}).get("org.opencontainers.image.title", c["digest"])
                           for c in children]
-                  sys.exit(f"::error::no child of {path}:{tag} matched {want}; available: {seen}")
+                  miss = f"no child of {path}:{tag} matched {want}; available: {seen}"
+                  if optional:
+                      print(f"::warning::{miss}, skipping")
+                      continue
+                  sys.exit(f"::error::{miss}")
 
               for child in matches:
                   digest = child["digest"]
@@ -115,7 +125,12 @@ jobs:
 
           json.dump(resolved, open(os.path.join(out, "manifest.json"), "w"), indent=2)
 
+          # nothing resolved -> no artifact, so a consumer sees the dependency as absent
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"pulled={len(resolved)}\n")
+
       - name: Upload deps
+        if: steps.pull.outputs.pulled != '0'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.entry.artifact }}

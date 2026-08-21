@@ -127,3 +127,34 @@ jobs:
           { "match-jobs": ["macos-26-x86_64-*"],     "artifacts": [{ "name": "dep-core-macos-26-x86_64-*", "dir": "staging-deps" }] },
           { "match-jobs": ["macos-26-armv8-*"],      "artifacts": [{ "name": "dep-core-macos-26-armv8-*", "dir": "staging-deps" }] }
         ]
+
+  # An optional dependency that resolves to nothing: the pull warns instead of failing and
+  # uploads no artifact, and the build goes on without it -- here the umbrella build, which
+  # needs no installed core. One job is enough; the rest of the matrix adds nothing.
+  consume-optional:
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/stage.yml
+    with:
+      staging-pull: >-
+        [
+          { "artifact": "dep-optional-ubuntu-22.04-x86_64-ninja-gcc-release", "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "no-such-staging", "annotations": {}, "optional": true }] }
+        ]
+      include-jobs: >-
+        [
+          "ubuntu-22.04-x86_64-ninja-gcc-release"
+        ]
+      cmake-presets: >-
+        [
+          {
+            "match-jobs": ["*"],
+            "configure-preset": "module-no-tests",
+            "cache-variables": { "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps" }
+          }
+        ]
+      packages: >-
+        [
+          { "match-jobs": ["*"], "artifacts": [{ "name": "dep-optional-*", "dir": "staging-deps" }] }
+        ]
