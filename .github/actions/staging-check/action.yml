@@ -1,0 +1,94 @@
+name: Check stagings
+description: Fails when a requested staging is not in the registry.
+
+inputs:
+  packages:
+    description: |-
+      JSON array of the stagings to check:
+      [
+        {
+          "path": "ghcr.io/<org>/path/to/package",   // the package
+          "tag": "latest"                            // the version to look for; both may name
+        }                                            // environment variables ("$CHANNEL")
+      ]
+    required: true
+  token:
+    description: "Token the registry is read with."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  resolved:
+    description: "JSON array of what was found: path, tag and digest."
+    value: ${{ steps.check.outputs.resolved }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup ORAS
+      uses: oras-project/setup-oras@v1
+
+    - name: Check
+      id: check
+      shell: python3 {0}
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        # Resolves each requested tag to a manifest, without downloading it. Reports every
+        # staging that is not there rather than stopping at the first, so one run says all of
+        # what is missing.
+        import json, os, subprocess, sys
+
+        def oras(args, input=None):
+            print("+ oras " + " ".join(args), flush=True)
+            r = subprocess.run(["oras"] + args, text=True, capture_output=True, input=input)
+            if r.stderr:
+                print(r.stderr, end="")
+            return r
+
+        packages = json.loads(os.environ["PACKAGES"])
+
+        # values may name environment variables, so what a request points at can come from an
+        # earlier step -- the channel a branch belongs to, the commit a ref file names
+        def expand(value, where):
+            expanded = os.path.expandvars(value)
+            if "$" in expanded:
+                sys.exit(f"::error::{where}: no such variable in {value!r}")
+            return expanded
+
+        for p in packages:
+            p["path"] = expand(p["path"], "path").rstrip("/").lower()
+            p["tag"]  = expand(p["tag"], "tag")
+
+        # login is best-effort: public packages resolve anonymously, and a fork pull request has
+        # only a read-only token
+        for host in sorted({p["path"].split("/")[0] for p in packages}):
+            if oras(["login", host, "-u", os.environ["ACTOR"], "--password-stdin"],
+                    input=os.environ["TOKEN"]).returncode != 0:
+                print(f"::warning::login failed for {host}; continuing (public packages resolve anonymously)")
+
+        resolved, missing = [], []
+
+        for p in packages:
+            path, tag = p["path"], p["tag"]
+
+            r = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"])
+            if r.returncode != 0:
+                missing.append(f"{path}:{tag} is not in the registry")
+                continue
+
+            digest = json.loads(r.stdout)["digest"]
+            resolved.append({"path": path, "tag": tag, "digest": digest})
+            print(f"resolved {path}:{tag} -> {digest}")
+
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"resolved={json.dumps(resolved)}\n")
+
+        if missing:
+            for miss in missing:
+                print(f"::error::{miss}")
+            sys.exit(1)
+
+        print(f"all {len(packages)} stagings are there")
