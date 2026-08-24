@@ -158,3 +158,64 @@ jobs:
         [
           { "match-jobs": ["*"], "artifacts": [{ "name": "dep-optional-*", "dir": "staging-deps" }] }
         ]
+
+  # The test packages are republished on every run, so everything but this run's own is spent.
+  # An hour of retention keeps what a concurrent run may still be pulling, and exercises the
+  # cleanup on the way.
+  cleanup:
+    needs: [publish, consume, consume-optional]
+    if: always()
+    permissions:
+      packages: write
+    uses: ./.github/workflows/staging-cleanup.yml
+    with:
+      staging-retentions: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core",     "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-module",   "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-core",   "retention": { "hours": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/installer/hello-module", "retention": { "hours": 1 } }
+        ]
+
+  # The other side of the retention window: test-cleanup proves that what is past it goes, this
+  # proves that what is inside it stays -- the index this run just published.
+  verify:
+    needs: cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Assert this run's stagings survived
+        shell: python3 {0}
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          import os, subprocess, sys
+
+          owner = os.environ["OWNER"].lower()
+          sha   = os.environ["SHA"]
+
+          subprocess.run(["oras", "login", "ghcr.io", "-u", os.environ["ACTOR"], "--password-stdin"],
+                         input=os.environ["TOKEN"], text=True, check=True)
+
+          gone = []
+          for kind in ("staging", "installer"):
+              for name in ("hello-core", "hello-module"):
+                  ref = f"ghcr.io/{owner}/test/{kind}/{name}:{sha}"
+                  if subprocess.run(["oras", "manifest", "fetch", "--descriptor", ref],
+                                    capture_output=True).returncode != 0:
+                      gone.append(ref)
+                  else:
+                      print(f"kept {ref}")
+
+          if gone:
+              sys.exit("::error::cleanup took stagings that are inside the retention window: "
+                       + ", ".join(gone))
+
+          print("ok: everything this run published is still there")
