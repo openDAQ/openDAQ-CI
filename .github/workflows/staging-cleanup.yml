@@ -110,7 +110,7 @@ jobs:
                   desc = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"], f"resolving {tag} failed")
                   digests.setdefault(json.loads(desc)["digest"], None)
 
-              to_delete, pruned = [], 0
+              children, stale = {}, {}
               for digest in digests:
                   index = json.loads(oras(["manifest", "fetch", f"{path}@{digest}"], f"fetching {digest} failed"))
                   ts    = index.get("annotations", {}).get("org.opencontainers.image.created")   # push time
@@ -118,15 +118,25 @@ jobs:
                       print(f"::warning::{path}@{digest}: no created annotation, keeping")
                       continue
                   created = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                  if created >= cutoff:
-                      continue
-                  kids = [m["digest"] for m in index.get("manifests", [])]
-                  print(f"{'[dry-run] ' if dry else ''}prune {path}@{digest} (age {(now - created).days}d) + {len(kids)} children")
+                  children[digest] = [m["digest"] for m in index.get("manifests", [])]
+                  if created < cutoff:
+                      stale[digest] = (now - created).days
+
+              # a child goes with the index that lists it, and an index that stays keeps its own:
+              # deleting a child two indexes share would leave the live one pointing at nothing
+              live = {kid for digest, kids in children.items() if digest not in stale for kid in kids}
+
+              to_delete = []
+              for digest, age in stale.items():
+                  kids   = [kid for kid in children[digest] if kid not in live]
+                  shared = len(children[digest]) - len(kids)
+                  print(f"{'[dry-run] ' if dry else ''}prune {path}@{digest} (age {age}d) + {len(kids)} children"
+                        + (f", {shared} left to a live index" if shared else ""))
                   to_delete += kids + [digest]   # children before their index
-                  pruned += 1
+
               if to_delete:
                   eol.append({"path": path, "digests": to_delete})
-              print(f"{path}: {pruned} of {len(digests)} indexes pruned")
+              print(f"{path}: {len(stale)} of {len(digests)} indexes pruned")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"eol={json.dumps(eol)}\n")
