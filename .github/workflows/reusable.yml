@@ -83,7 +83,7 @@ jobs:
               "target-arch": None,
               "cc": None,
               "cxx": None,
-              "developer-dir": None,
+              "env": {},
               "cmd-sudo": None,
               "cmd-apt-envs": ["DEBIAN_FRONTEND=noninteractive", "TZ=Etc/UTC"],
               "cmd-brew-envs": [],
@@ -186,8 +186,8 @@ jobs:
 
           # /usr/bin/clang follows DEVELOPER_DIR, so the Xcode picks the Apple clang version
           _apple_clang = { "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++" }
-          _apple_clang_17 = {**_apple_clang, "developer-dir": "/Applications/Xcode_26.3.app/Contents/Developer"}
-          _apple_clang_21 = {**_apple_clang, "developer-dir": "/Applications/Xcode_26.6.app/Contents/Developer"}
+          _apple_clang_17 = {**_apple_clang, "env": {"DEVELOPER_DIR": "/Applications/Xcode_26.3.app/Contents/Developer"}}
+          _apple_clang_21 = {**_apple_clang, "env": {"DEVELOPER_DIR": "/Applications/Xcode_26.6.app/Contents/Developer"}}
 
           # --- Windows configs ---
 
@@ -441,7 +441,7 @@ jobs:
                   "target-arch": cfg.get("target-arch") or "",
                   "cc": cc,
                   "cxx": cxx,
-                  "developer-dir": cfg.get("developer-dir") or "",
+                  "env": json.dumps(cfg.get("env") or {}),
                   "build-type": build_type,
                   "timeout-minutes": timeout_minutes,
                   "setup-msvc-toolchain": setup_msvc_toolchain,
@@ -667,6 +667,15 @@ jobs:
         shell: bash
         run: echo "${{ inputs.opendaq-ref }}" > opendaq_ref
 
+      - name: Set environment
+        if: matrix.env != '{}'
+        shell: python3 {0}
+        run: |
+          import json, os
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.writelines(f"{k}={v}\n" for k, v in json.loads(r'''${{ matrix.env }}''').items())
+
       - name: Setup PPA repositories
         if: matrix.cmd-install-ppas != ''
         run: ${{ matrix.cmd-install-ppas }}
@@ -717,11 +726,6 @@ jobs:
       - name: Setup MSVC toolchain
         if: matrix.setup-msvc-toolchain
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Select Xcode
-        if: matrix.developer-dir != ''
-        shell: bash
-        run: echo "DEVELOPER_DIR=${{ matrix.developer-dir }}" >> "$GITHUB_ENV"
 
       - name: Install Intel C/C++ compiler
         if: matrix.intel-cc-url
