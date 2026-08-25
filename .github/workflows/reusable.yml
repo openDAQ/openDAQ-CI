@@ -83,6 +83,7 @@ jobs:
               "target-arch": None,
               "cc": None,
               "cxx": None,
+              "developer-dir": None,
               "cmd-sudo": None,
               "cmd-apt-envs": ["DEBIAN_FRONTEND=noninteractive", "TZ=Etc/UTC"],
               "cmd-brew-envs": [],
@@ -140,11 +141,8 @@ jobs:
           }
 
           _ubuntu_20_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:20.04" }
-          _ubuntu_20_04_x86_ninja = { **_ubuntu_guest_x86_ninja, "image": "ubuntu:20.04" }
-
-          # arm64 image variant is pulled automatically on the ARM runner; arch is detected.
+          _ubuntu_20_04_x86_ninja    = { **_ubuntu_guest_x86_ninja,    "image": "ubuntu:20.04" }
           _ubuntu_22_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:22.04" }
-          _ubuntu_22_04_armv8_ninja  = { **_ubuntu_22_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
 
           _ubuntu_24_04_x86_64_ninja = {
               **_ubuntu_guest_x86_64_ninja,
@@ -153,7 +151,14 @@ jobs:
               "allow-python-ppa": True,
           }
 
-          # --- manylinux configs (yum; default image compiler, as wheels are built) ---
+          # arm64 image variant is pulled automatically on the ARM runner; arch is detected.
+          _ubuntu_20_04_armv8_ninja = { **_ubuntu_20_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
+          _ubuntu_22_04_armv8_ninja = { **_ubuntu_22_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
+          _ubuntu_24_04_armv8_ninja = { **_ubuntu_24_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
+
+          # --- manylinux configs (yum; gcc-toolset compilers, as wheels are built) ---
+
+          _gcc_toolset_14 = "/opt/rh/gcc-toolset-14/root/usr/bin/"
 
           _manylinux_2_28_x86_64_ninja = {
               **_base,
@@ -176,13 +181,13 @@ jobs:
               "fmt-pip-install": "python{ver}{arch} -m pip install --break-system-packages {pkgs}",
           }
 
-          _macos_15_armv8_ninja   = {**_macos_ninja, "runner": "macos-15"}
-          _macos_15_x86_64_ninja  = {**_macos_ninja, "runner": "macos-15-intel"}
           _macos_26_armv8_ninja   = {**_macos_ninja, "runner": "macos-26"}
           _macos_26_x86_64_ninja  = {**_macos_ninja, "runner": "macos-26-intel"}
 
-          _apple_clang_cc = { "cc": "/usr/bin/clang" }
-          _apple_clang_cxx = { "cxx": "/usr/bin/clang++" }
+          # /usr/bin/clang follows DEVELOPER_DIR, so the Xcode picks the Apple clang version
+          _apple_clang = { "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++" }
+          _apple_clang_17 = {**_apple_clang, "developer-dir": "/Applications/Xcode_26.3.app/Contents/Developer"}
+          _apple_clang_21 = {**_apple_clang, "developer-dir": "/Applications/Xcode_26.6.app/Contents/Developer"}
 
           # --- Windows configs ---
 
@@ -196,6 +201,14 @@ jobs:
 
           _windows_2022_x86_64_msvs  = {**_windows_2022_x86_64, "generator": "Visual Studio 17 2022"}
           _windows_2022_x86_64_ninja = {**_windows_2022_x86_64, "generator": "Ninja"}
+
+          # the generator drives the arm64 cross toolchain, so no msvc-dev-cmd environment
+          _windows_11_armv8_msvs = {
+              **_windows_2022_x86_64_msvs,
+              "runner": "windows-11-arm",
+              "target-arch": "armv8",
+              "setup-msvc-toolchain": False,
+          }
 
           # --- Intel oneAPI configs (lookup by 'setup-intel-cc' job field) ---
 
@@ -230,24 +243,27 @@ jobs:
               "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release" },
               "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-intel-cc": "windows-intel-cc" },
 
+              "windows-11-arm-msvs-v143-release":           {**_windows_11_armv8_msvs,      "toolset": "v143",                            "build-type": "Release" },
+
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_ninja,     "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"] },
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
+              "ubuntu-20.04-armv8-ninja-clang-9-release":   {**_ubuntu_20_04_armv8_ninja,   "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
 
               "ubuntu-22.04-x86_64-ninja-gcc-release":      {**_ubuntu_22_04_x86_64_ninja,  "cc": "gcc",        "cxx": "g++",             "build-type": "Release",  "apt-install": ["gcc", "g++"] },
               "ubuntu-22.04-armv8-ninja-gcc-release":       {**_ubuntu_22_04_armv8_ninja,   "cc": "gcc",        "cxx": "g++",             "build-type": "Release",  "apt-install": ["gcc", "g++"] },
 
-              "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",   "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-x86_64-ninja-gcc-14-debug":     {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",    "apt-install": ["gcc-14", "g++-14"] },
+              "ubuntu-24.04-armv8-ninja-gcc-14-debug":      {**_ubuntu_24_04_armv8_ninja,   "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Debug",    "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-gcc-14-release":   {**_ubuntu_24_04_x86_64_ninja,  "cc": "gcc-14",     "cxx": "g++-14",          "build-type": "Release",  "apt-install": ["gcc-14", "g++-14"] },
               "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
               "ubuntu-24.04-x86_64-ninja-intel-cc-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "icx",        "cxx": "icpx",            "build-type": "Release",  "setup-intel-cc": "linux-intel-cc"},
 
-              "manylinux_2_28-x86_64-ninja-gcc-release":    {**_manylinux_2_28_x86_64_ninja,                                            "build-type": "Release" },
+              "manylinux_2_28-x86_64-ninja-gcc-14-release": {**_manylinux_2_28_x86_64_ninja, "cc": _gcc_toolset_14 + "gcc", "cxx": _gcc_toolset_14 + "g++", "build-type": "Release",  "yum-install": ["gcc-toolset-14-gcc", "gcc-toolset-14-gcc-c++"] },
 
-              "macos-26-x86_64-ninja-appleclang-debug":     {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Debug"},
-              "macos-26-x86_64-ninja-appleclang-release":   {**_macos_26_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
-              "macos-26-armv8-ninja-appleclang-release":    {**_macos_26_armv8_ninja,       **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
-
-              "macos-15-x86_64-ninja-appleclang-release":   {**_macos_15_x86_64_ninja,      **_apple_clang_cc,  **_apple_clang_cxx,        "build-type": "Release"},
+              "macos-26-x86_64-ninja-appleclang-17-release": {**_macos_26_x86_64_ninja,     **_apple_clang_17,                            "build-type": "Release"},
+              "macos-26-x86_64-ninja-appleclang-21-debug":   {**_macos_26_x86_64_ninja,     **_apple_clang_21,                            "build-type": "Debug"},
+              "macos-26-x86_64-ninja-appleclang-21-release": {**_macos_26_x86_64_ninja,     **_apple_clang_21,                            "build-type": "Release"},
+              "macos-26-armv8-ninja-appleclang-21-release":  {**_macos_26_armv8_ninja,      **_apple_clang_21,                            "build-type": "Release"},
           }
 
           # --- Generate jobs matrix ---
@@ -425,6 +441,7 @@ jobs:
                   "target-arch": cfg.get("target-arch") or "",
                   "cc": cc,
                   "cxx": cxx,
+                  "developer-dir": cfg.get("developer-dir") or "",
                   "build-type": build_type,
                   "timeout-minutes": timeout_minutes,
                   "setup-msvc-toolchain": setup_msvc_toolchain,
@@ -478,7 +495,8 @@ jobs:
               generator = entry.get("generator") or ""
               toolset = entry.get("toolset") or ""
               target_arch = entry.get("target-arch") or ""
-              architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
+              vs_architecture = {"x86": "Win32", "armv8": "ARM64"}
+              architecture = vs_architecture.get(target_arch, "") if generator.startswith("Visual Studio") else ""
               cc = entry.get("cc") or ""
               cxx = entry.get("cxx") or ""
               enable_staging = entry.get("enable-staging") or False
@@ -699,6 +717,11 @@ jobs:
       - name: Setup MSVC toolchain
         if: matrix.setup-msvc-toolchain
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Select Xcode
+        if: matrix.developer-dir != ''
+        shell: bash
+        run: echo "DEVELOPER_DIR=${{ matrix.developer-dir }}" >> "$GITHUB_ENV"
 
       - name: Install Intel C/C++ compiler
         if: matrix.intel-cc-url

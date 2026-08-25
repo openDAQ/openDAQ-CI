@@ -22,11 +22,11 @@ jobs:
         [
           "ubuntu-22.04-x86_64-ninja-gcc-release",
           "ubuntu-22.04-armv8-ninja-gcc-release",
-          "manylinux_2_28-x86_64-ninja-gcc-release",
+          "manylinux_2_28-x86_64-ninja-gcc-14-release",
           "windows-2022-x86_64-msvs-v143-release",
           "windows-2022-x86-msvs-v143-release",
-          "macos-26-x86_64-ninja-appleclang-release",
-          "macos-26-armv8-ninja-appleclang-release"
+          "macos-26-x86_64-ninja-appleclang-21-release",
+          "macos-26-armv8-ninja-appleclang-21-release"
         ]
       cmake-presets: >-
         [
@@ -78,21 +78,21 @@ jobs:
         [
           { "artifact": "dep-core-ubuntu-22.04-x86_64-ninja-gcc-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "linux",           "com.opendaq.settings.arch": "x86_64" } }] },
           { "artifact": "dep-core-ubuntu-22.04-armv8-ninja-gcc-release",      "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "linux",           "com.opendaq.settings.arch": "armv8"  } }] },
-          { "artifact": "dep-core-manylinux_2_28-x86_64-ninja-gcc-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "manylinux_2_28", "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-manylinux_2_28-x86_64-ninja-gcc-14-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "manylinux_2_28", "com.opendaq.settings.arch": "x86_64" } }] },
           { "artifact": "dep-core-windows-2022-x86_64-msvs-v143-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "windows",         "com.opendaq.settings.arch": "x86_64" } }] },
           { "artifact": "dep-core-windows-2022-x86-msvs-v143-release",        "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "windows",         "com.opendaq.settings.arch": "x86"    } }] },
-          { "artifact": "dep-core-macos-26-x86_64-ninja-appleclang-release",  "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "x86_64" } }] },
-          { "artifact": "dep-core-macos-26-armv8-ninja-appleclang-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "armv8"  } }] }
+          { "artifact": "dep-core-macos-26-x86_64-ninja-appleclang-21-release",  "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-macos-26-armv8-ninja-appleclang-21-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.package.platform": "macos",           "com.opendaq.settings.arch": "armv8"  } }] }
         ]
       include-jobs: >-
         [
           "ubuntu-22.04-x86_64-ninja-gcc-release",
           "ubuntu-22.04-armv8-ninja-gcc-release",
-          "manylinux_2_28-x86_64-ninja-gcc-release",
+          "manylinux_2_28-x86_64-ninja-gcc-14-release",
           "windows-2022-x86_64-msvs-v143-release",
           "windows-2022-x86-msvs-v143-release",
-          "macos-26-x86_64-ninja-appleclang-release",
-          "macos-26-armv8-ninja-appleclang-release"
+          "macos-26-x86_64-ninja-appleclang-21-release",
+          "macos-26-armv8-ninja-appleclang-21-release"
         ]
       cmake-presets: >-
         [
