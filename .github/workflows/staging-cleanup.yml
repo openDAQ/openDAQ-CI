@@ -1,0 +1,192 @@
+name: Staging Cleanup
+
+# Prunes aged staging packages, split into two phases so the registry-specific part is isolated:
+#   Find EOL     -- registry-agnostic: enumerate a package's indexes and read each one's age via
+#                   oras (org.opencontainers.image.created), and emit the end-of-life digests --
+#                   each stale index's children, then the index. Just digests, no registry ids.
+#   Prune (ghcr) -- ghcr-specific: ghcr has no OCI manifest delete, so resolve each digest to its
+#                   GitHub Packages version and DELETE it over REST. Skipped on a dry run.
+#
+# Removal always goes through the index: children by digest, then the index itself. NEVER "delete
+# untagged versions" -- live children are untagged too. Adding another registry means keeping Find
+# EOL and adding a Prune (<registry>) that consumes the same digests; the up-front guard admits only
+# ghcr today (its only Prune). Point this at paths a repo owns (a nightly channel); a release
+# channel is simply a path you never clean.
+on:
+  workflow_call:
+    inputs:
+      staging-retentions:
+        description: |-
+          JSON array of paths to prune with their retention window:
+          [
+            {
+              "path": "ghcr.io/<org>/path/to/package",   // the package to prune
+              "retention": { "days": 14 }                // keep this long; unset fields are 0
+            }
+          ]
+          retention is days + hours + minutes + seconds summed; an index older than that is
+          pruned. A zero window prunes nothing (the entry is skipped) -- retention 0 is never
+          "delete all".
+        type: string
+        required: true
+      dry-run:
+        description: "List what would be pruned without deleting."
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Validate inputs
+        shell: python3 {0}
+        env:
+          RETENTIONS: ${{ inputs.staging-retentions }}
+        run: |
+          import json, os, sys
+
+          # Only the GitHub Container Registry (ghcr.io) is used today.
+          #
+          # ghcr.io has no OCI manifest delete (its docs point to the REST API instead),
+          # so the Prune step removes end-of-life versions over the GitHub Packages API.
+          #
+          # Adding a new OCI registry means adding a matching Prune step -- via OCI manifest delete,
+          # or that registry's specific REST API where OCI delete isn't available (as with ghcr).
+          #
+          # Until then, reject non-ghcr paths here:
+
+          for target in json.loads(os.environ["RETENTIONS"]):
+              if target["path"].rstrip("/").lower().split("/")[0] != "ghcr.io":
+                  sys.exit(f"::error::{target['path']}: staging-cleanup only supports ghcr.io")
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Find EOL
+        id: eol
+        shell: python3 {0}
+        env:
+          RETENTIONS: ${{ inputs.staging-retentions }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          import json, os, subprocess, sys
+          from datetime import datetime, timezone, timedelta
+
+          retentions = json.loads(os.environ["RETENTIONS"])
+          token      = os.environ["TOKEN"]
+          actor      = os.environ["ACTOR"]
+          dry        = os.environ["DRY_RUN"] == "true"
+          now        = datetime.now(timezone.utc)
+
+          def oras(args, err, **kw):
+              r = subprocess.run(["oras", *args], text=True, capture_output=True, **kw)
+              if r.returncode != 0:
+                  sys.exit(f"::error::{err}: {r.stderr.strip()}")
+              return r.stdout
+
+          # login to every registry the paths reference so oras can enumerate tags and read manifests
+          for host in sorted({t["path"].rstrip("/").lower().split("/")[0] for t in retentions}):
+              oras(["login", host, "-u", actor, "--password-stdin"], f"login failed for {host}", input=token)
+
+          eol = []   # [{path, digests: [child..., index, ...]}] -- end-of-life, registry-agnostic, for Prune
+          for target in retentions:
+              path   = target["path"].rstrip("/").lower()
+              keep   = target["retention"]
+              window = timedelta(days=keep.get("days", 0), hours=keep.get("hours", 0),
+                                 minutes=keep.get("minutes", 0), seconds=keep.get("seconds", 0))
+              if window.total_seconds() <= 0:
+                  print(f"::warning::{path}: zero retention, skipping")
+                  continue
+              cutoff = now - window
+
+              # every index is tagged (sha + short) and tags/list is OCI's only enumeration; two
+              # tags share one index digest, so resolve each tag and collapse to unique digests
+              digests = {}
+              for tag in oras(["repo", "tags", path], f"listing tags for {path} failed").split():
+                  desc = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"], f"resolving {tag} failed")
+                  digests.setdefault(json.loads(desc)["digest"], None)
+
+              children, stale = {}, {}
+              for digest in digests:
+                  index = json.loads(oras(["manifest", "fetch", f"{path}@{digest}"], f"fetching {digest} failed"))
+                  ts    = index.get("annotations", {}).get("org.opencontainers.image.created")   # push time
+                  if ts is None:
+                      print(f"::warning::{path}@{digest}: no created annotation, keeping")
+                      continue
+                  created = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                  children[digest] = [m["digest"] for m in index.get("manifests", [])]
+                  if created < cutoff:
+                      stale[digest] = (now - created).days
+
+              # a child goes with the index that lists it, and an index that stays keeps its own:
+              # deleting a child two indexes share would leave the live one pointing at nothing
+              live = {kid for digest, kids in children.items() if digest not in stale for kid in kids}
+
+              to_delete = []
+              for digest, age in stale.items():
+                  kids   = [kid for kid in children[digest] if kid not in live]
+                  shared = len(children[digest]) - len(kids)
+                  print(f"{'[dry-run] ' if dry else ''}prune {path}@{digest} (age {age}d) + {len(kids)} children"
+                        + (f", {shared} left to a live index" if shared else ""))
+                  to_delete += kids + [digest]   # children before their index
+
+              if to_delete:
+                  eol.append({"path": path, "digests": to_delete})
+              print(f"{path}: {len(stale)} of {len(digests)} indexes pruned")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"eol={json.dumps(eol)}\n")
+
+      - name: Prune (ghcr)
+        if: ${{ !inputs.dry-run }}
+        shell: python3 {0}
+        env:
+          EOL: ${{ steps.eol.outputs.eol }}
+          TOKEN: ${{ github.token }}
+        run: |
+          import json, os, sys, urllib.request, urllib.parse, urllib.error
+
+          token = os.environ["TOKEN"]
+
+          def gh(method, url):
+              req = urllib.request.Request(url, method=method)
+              req.add_header("Authorization", f"Bearer {token}")
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      body = r.read()
+                      return r.status, (json.loads(body) if body else None)
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(errors="replace")
+
+          for entry in json.loads(os.environ["EOL"]):
+              path = entry["path"]
+              _, org, *repo = path.split("/")
+              name        = urllib.parse.quote("/".join(repo), safe="")
+              package_url = f"https://api.github.com/orgs/{org}/packages/container/{name}"
+
+              # ghcr deletes by version id, not digest -- map every digest to its version's url
+              url_by_digest, page = {}, 1
+              while True:
+                  st, data = gh("GET", f"{package_url}/versions?per_page=100&page={page}")
+                  if st != 200:
+                      sys.exit(f"::error::listing versions failed ({st}) for {path}: {data}")
+                  url_by_digest.update({v["name"]: v["url"] for v in data})
+                  if len(data) < 100: break
+                  page += 1
+
+              # children come before their index -- a re-run heals a partial failure
+              for digest in entry["digests"]:
+                  url = url_by_digest.get(digest)
+                  if url is None:   # already gone on a re-run
+                      continue
+                  st, _ = gh("DELETE", url)
+                  if st == 400:   # ghcr refuses to delete a package's last version -- drop the package
+                      st, _ = gh("DELETE", package_url)
+                  if st not in (204, 404):
+                      sys.exit(f"::error::deleting {digest} failed ({st})")

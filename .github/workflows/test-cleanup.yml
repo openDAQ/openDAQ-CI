@@ -1,0 +1,92 @@
+name: Test Cleanup CI
+
+# Self-contained, end-to-end exercise of staging-cleanup. `artifact` packs a text file into a
+# tarball and uploads it; `push` publishes it through the real staging-push (which stamps the
+# index with its push time); `cleanup` prunes with a 1-second retention -- minutes pass between
+# jobs, so the freshly pushed index is already past it; `verify` asserts the path is empty. This
+# covers the whole OCI-native path: the created annotation staging-push writes, the age filter,
+# and `oras manifest delete`. Run-scoped so parallel PRs never clash.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      # two artifacts so the index gets two children -- and so download-artifact nests each under
+      # its own directory (a lone artifact is unpacked flat, which staging-push's glob would miss)
+      - name: Pack throwaway packages
+        run: |
+          for arch in x86_64 armv8; do
+            echo "hello $arch" > "hello-$arch.txt"
+            tar czf "hello-$arch.tar.gz" "hello-$arch.txt"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cleanup-x86_64
+          path: hello-x86_64.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cleanup-armv8
+          path: hello-armv8.tar.gz
+
+  push:
+    needs: artifact
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/staging-push.yml
+    with:
+      staging-packages: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}", "artifacts": ["cleanup-*"] }
+        ]
+
+  cleanup:
+    needs: push
+    permissions:
+      packages: write
+    uses: ./.github/workflows/staging-cleanup.yml
+    with:
+      dry-run: false
+      staging-retentions: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}", "retention": { "seconds": 1 } }
+        ]
+
+  verify:
+    needs: cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Assert the path is empty
+        shell: python3 {0}
+        env:
+          BASE: ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          import subprocess, sys, os
+
+          base  = os.environ["BASE"].lower()
+          token = os.environ["TOKEN"]
+          actor = os.environ["ACTOR"]
+
+          subprocess.run(["oras", "login", "ghcr.io", "-u", actor, "--password-stdin"],
+                         input=token, text=True, check=True)
+          # once the last version is gone the package disappears, so a failed listing means pruned
+          r = subprocess.run(["oras", "repo", "tags", base], text=True, capture_output=True)
+          tags = r.stdout.split() if r.returncode == 0 else []
+          print(f"remaining tags: {tags}")
+          if tags:
+              sys.exit(f"::error::tags survived cleanup: {tags}")
+          print("ok: index pruned, path empty")
