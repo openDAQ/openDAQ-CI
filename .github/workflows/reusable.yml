@@ -170,6 +170,13 @@ jobs:
               "generator": "Ninja",
           }
 
+          # manylinux carries the architecture in the repository name, there is no multi-arch tag
+          _manylinux_2_28_armv8_ninja = {
+              **_manylinux_2_28_x86_64_ninja,
+              "runner": "ubuntu-24.04-arm",
+              "image": "quay.io/pypa/manylinux_2_28_aarch64",
+          }
+
           # --- macOS configs ---
 
           _macos_ninja = {
@@ -259,6 +266,7 @@ jobs:
               "ubuntu-24.04-x86_64-ninja-intel-cc-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "icx",        "cxx": "icpx",            "build-type": "Release",  "setup-intel-cc": "linux-intel-cc"},
 
               "manylinux_2_28-x86_64-ninja-gcc-14-release": {**_manylinux_2_28_x86_64_ninja, "cc": _gcc_toolset_14 + "gcc", "cxx": _gcc_toolset_14 + "g++", "build-type": "Release",  "yum-install": ["gcc-toolset-14-gcc", "gcc-toolset-14-gcc-c++"] },
+              "manylinux_2_28-armv8-ninja-gcc-14-release":  {**_manylinux_2_28_armv8_ninja,  "cc": _gcc_toolset_14 + "gcc", "cxx": _gcc_toolset_14 + "g++", "build-type": "Release",  "yum-install": ["gcc-toolset-14-gcc", "gcc-toolset-14-gcc-c++"] },
 
               "macos-26-x86_64-ninja-appleclang-17-debug":   {**_macos_26_x86_64_ninja,     **_apple_clang_17,                            "build-type": "Debug"},
               "macos-26-x86_64-ninja-appleclang-17-release": {**_macos_26_x86_64_ninja,     **_apple_clang_17,                            "build-type": "Release"},
