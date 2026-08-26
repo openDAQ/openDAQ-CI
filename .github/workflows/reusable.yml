@@ -250,7 +250,7 @@ jobs:
               "windows-2022-x86_64-ninja-clang-release":    {**_windows_2022_x86_64_ninja,  "cc": "clang",      "cxx": "clang++",         "build-type": "Release" },
               "windows-2022-x86_64-ninja-intel-cc-release": {**_windows_2022_x86_64_ninja,  "cc": "icx",        "cxx": "icx",             "build-type": "Release",  "setup-intel-cc": "windows-intel-cc" },
 
-              "windows-11-arm-msvs-v143-release":           {**_windows_11_armv8_msvs,      "toolset": "v143",                            "build-type": "Release" },
+              "windows-11-armv8-msvs-v143-release":         {**_windows_11_armv8_msvs,      "toolset": "v143",                            "build-type": "Release" },
 
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_ninja,     "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"] },
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
