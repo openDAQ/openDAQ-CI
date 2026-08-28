@@ -764,7 +764,8 @@ jobs:
           # build/.artifacts, so match tarballs anywhere under it.
           tarballs = glob.glob('build/.artifacts/**/*.tar.gz', recursive=True)
           if not tarballs:
-              raise SystemExit("::error::no staging dependency tarballs were downloaded")
+              # an optional dependency that resolved to nothing uploads no artifact
+              print("::warning::no dependency staging was downloaded; building without it")
           for a in arts:
               os.makedirs(a["dir"], exist_ok=True)
               for t in tarballs:
