@@ -32,7 +32,7 @@ on:
         type: string
         default: '[]'
       cpack-presets:
-        description: 'JSON array of cpack preset configs, e.g. [{"match-jobs": ["*"], "enable-staging": true}, {"match-jobs": ["ubuntu-*"], "package": "DEB"}]. Per job a hidden base packagePreset is generated, inherited by <job>-staging and <job>-package. "variables" pass CPack vars onto the base; "package-preset" names a project packagePreset for the base to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
+        description: 'JSON array of cpack preset configs. A job declares its outputs as lists, so one build yields several component-scoped packages: "stagings": [{"name": "core", "variables": {...}, "package-preset": "..."}] and, likewise, "installers": [{"name": "core", "package": "DEB", "variables": {...}}]. Each named package becomes a <job>-staging-<name> (TGZ) or <job>-package-<name> packagePreset that cpacks into its own subdir <staging|package-dir>/<name>, all inside the single staging-<job> / package-<job> artifact. Packages merge by name across matching entries (variables update, package/package-preset last-wins), e.g. a ["*"] entry sets common variables and a ["ubuntu-*"] entry adds the DEB installer. "variables" pass CPack vars; "package-preset" names a project packagePreset to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
         type: string
         default: '[]'
     outputs:
@@ -367,19 +367,29 @@ jobs:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
                       timeout_minutes = req.get("timeout-minutes", timeout_minutes)
 
-              # resolve cpack presets for this job (last-match-wins)
-              enable_staging = False
-              package_gen = ""
-              package_preset = ""
-              packaging_variables = {}
+              # this job's output packages: matching stagings/installers merged by name (variables update, package/package-preset last-wins)
+              def merge_cpack_outputs(into, outputs):
+                  for pkg in outputs:
+                      acc = into.setdefault(pkg["name"], {"variables": {}})
+                      acc["variables"].update(pkg.get("variables", {}))
+                      for k in ("package", "package-preset"):
+                          if pkg.get(k):
+                              acc[k] = pkg[k]
+
+              stagings_by_name, installers_by_name = {}, {}
               for req in cpack_presets:
                   if matches_any(job_name, req.get("match-jobs", ["*"])):
-                      enable_staging = req.get("enable-staging", enable_staging)
-                      package_gen = req.get("package", package_gen)
-                      package_preset = req.get("package-preset", package_preset)
-                      packaging_variables.update(req.get("variables", {}))
-              staging_artifact = upload_pattern.replace("*", f"staging-{job_name}") if enable_staging else ""
-              package_artifact = upload_pattern.replace("*", f"package-{job_name}") if package_gen else ""
+                      merge_cpack_outputs(stagings_by_name, req.get("stagings", []))
+                      merge_cpack_outputs(installers_by_name, req.get("installers", []))
+              stagings   = [{"name": n, **fields} for n, fields in stagings_by_name.items()]
+              installers = [{"name": n, **fields} for n, fields in installers_by_name.items()]
+
+              staging_artifact = upload_pattern.replace("*", f"staging-{job_name}") if stagings else ""
+              package_artifact = upload_pattern.replace("*", f"package-{job_name}") if installers else ""
+
+              # one cpack per package into <staging|package>/<name>/; chain the presets for the ci step
+              cmd_stage   = " && ".join(f"cpack --preset {job_name}-staging-{s['name']}" for s in stagings)
+              cmd_package = " && ".join(f"cpack --preset {job_name}-package-{i['name']}" for i in installers)
 
               # download-artifact pattern scoping the consume step to this job's deps
               consume_names = [a["name"] for a in consume_artifacts]
@@ -439,12 +449,12 @@ jobs:
                   "cmd-ctest-priv": cmd_run_tests_priv,
                   "python-version": python_version,
                   "python-arch": python_arch,
-                  "enable-staging": enable_staging,
-                  "package": package_gen,
+                  "stagings": json.dumps(stagings),
+                  "installers": json.dumps(installers),
                   "staging-artifact": staging_artifact,
                   "package-artifact": package_artifact,
-                  "packaging-variables": json.dumps(packaging_variables),
-                  "package-preset": package_preset,
+                  "cmd-stage": cmd_stage,
+                  "cmd-package": cmd_package,
                   "consume-artifacts": json.dumps(consume_artifacts),
                   "consume-pattern": consume_pattern,
                   **install_cmds,
@@ -481,10 +491,8 @@ jobs:
               architecture = "Win32" if target_arch == "x86" and generator.startswith("Visual Studio") else ""
               cc = entry.get("cc") or ""
               cxx = entry.get("cxx") or ""
-              enable_staging = entry.get("enable-staging") or False
-              package_gen = entry.get("package") or ""
-              package_preset = entry.get("package-preset") or ""
-              packaging_variables = json.loads(entry.get("packaging-variables") or "{}")
+              stagings = json.loads(entry.get("stagings") or "[]")
+              installers = json.loads(entry.get("installers") or "[]")
 
               # find matching cmake-presets config
               configure_preset = ""
@@ -529,33 +537,23 @@ jobs:
                       "output": {"outputOnFailure": True},
                   })
 
-              # package presets: a hidden base per job (configurePreset + variables, optionally
-              # inheriting a project packagePreset) shared by <job>-staging (TGZ) and
-              # <job>-package (native installer). `configurations` selects the build type for
-              # multi-config (VS) generators.
-              if enable_staging or package_gen:
-                  user_presets["packagePresets"].append({
-                      "name": name,
-                      "hidden": True,
+              # one packagePreset per output package, cpacking into its own <name>/ subdir.
+              # `configurations` selects the build type for multi-config (VS) generators.
+              def package_preset_for(pkg, kind, generator, out_dir):
+                  return {
+                      "name": f"{name}-{kind}-{pkg['name']}",
                       "configurePreset": name,
-                      **({"inherits": [package_preset]} if package_preset else {}),
+                      **({"inherits": [pkg["package-preset"]]} if pkg.get("package-preset") else {}),
+                      "generators": [generator],
+                      "packageDirectory": "$" + "{sourceDir}" + f"/{out_dir}/{pkg['name']}",
                       **({"configurations": [build_type]} if build_type else {}),
-                      **({"variables": packaging_variables} if packaging_variables else {}),
-                  })
-              if enable_staging:
-                  user_presets["packagePresets"].append({
-                      "name": f"{name}-staging",
-                      "inherits": [name],
-                      "generators": ["TGZ"],
-                      "packageDirectory": "$" + "{sourceDir}" + f"/{staging_dir}",
-                  })
-              if package_gen:
-                  user_presets["packagePresets"].append({
-                      "name": f"{name}-package",
-                      "inherits": [name],
-                      "generators": [package_gen],
-                      "packageDirectory": "$" + "{sourceDir}" + f"/{package_dir}",
-                  })
+                      **({"variables": pkg["variables"]} if pkg.get("variables") else {}),
+                  }
+
+              for pkg in stagings:
+                  user_presets["packagePresets"].append(package_preset_for(pkg, "staging", "TGZ", staging_dir))
+              for pkg in installers:
+                  user_presets["packagePresets"].append(package_preset_for(pkg, "package", pkg["package"], package_dir))
 
           with open("CMakeUserPresets.json", "w") as f:
               json.dump(user_presets, f, indent=2)
@@ -783,33 +781,33 @@ jobs:
 
       - name: Stage
         id: stage
-        if: matrix.enable-staging
-        run: cpack --preset ${{ matrix.name }}-staging
+        if: matrix.cmd-stage != ''
+        run: ${{ matrix.cmd-stage }}
 
       - name: Upload staging
-        if: matrix.enable-staging
+        if: matrix.cmd-stage != ''
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.staging-artifact }}
           path: |
             ${{ matrix.staging-dir }}
-            !${{ matrix.staging-dir }}/_CPack_Packages/**
+            !${{ matrix.staging-dir }}/**/_CPack_Packages/**
           if-no-files-found: error
           retention-days: 7
 
       - name: Package
         id: package
-        if: matrix.package != ''
-        run: cpack --preset ${{ matrix.name }}-package
+        if: matrix.cmd-package != ''
+        run: ${{ matrix.cmd-package }}
 
       - name: Upload package
-        if: matrix.package != ''
+        if: matrix.cmd-package != ''
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.package-artifact }}
           path: |
             ${{ matrix.package-dir }}
-            !${{ matrix.package-dir }}/_CPack_Packages/**
+            !${{ matrix.package-dir }}/**/_CPack_Packages/**
           if-no-files-found: error
           retention-days: 7
 
@@ -845,22 +843,24 @@ jobs:
         shell: bash
         run: |
           s() { [ "$1" = "success" ] && echo "✅" || ([ "$1" = "skipped" ] && echo "➖" || echo "❌"); }
-          emit_meta() {  # $1 = dir label, $2 = staging-meta.json path
-            [ -f "$2" ] || return 0
-            {
-              echo "<details><summary>📦 $1/staging-meta.json</summary>"
-              echo ""
-              echo '```json'
-              cat "$2"
-              echo ""
-              echo '```'
-              echo ""
-              echo "</details>"
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
+          emit_meta() {  # $1 = kind label, $2 = kind dir (one staging-meta.json per <name> subdir)
+            for f in "$2"/*/staging-meta.json; do
+              [ -f "$f" ] || continue
+              {
+                echo "<details><summary>📦 $1/$(basename "$(dirname "$f")")/staging-meta.json</summary>"
+                echo ""
+                echo '```json'
+                cat "$f"
+                echo ""
+                echo '```'
+                echo ""
+                echo "</details>"
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
+            done
           }
-          [ "${{ matrix.enable-staging }}" = "true" ] && emit_meta staging "${{ matrix.staging-dir }}/staging-meta.json"
-          [ "${{ matrix.package }}" != "" ] && emit_meta package "${{ matrix.package-dir }}/staging-meta.json"
+          [ -n "${{ matrix.cmd-stage }}" ] && emit_meta staging "${{ matrix.staging-dir }}"
+          [ -n "${{ matrix.cmd-package }}" ] && emit_meta package "${{ matrix.package-dir }}"
           [ "${{ job.status }}" = "failure" ] || exit 0
           {
             echo "<details><summary>❌ ${{ matrix.name }}</summary>"
@@ -887,15 +887,15 @@ jobs:
             echo ""
             echo "# $(s ${{ steps.build.outcome }}) Build:"
             echo "cmake --build --preset ${{ matrix.name }}"
-            if [ "${{ matrix.enable-staging }}" = "true" ]; then
+            if [ -n "${{ matrix.cmd-stage }}" ]; then
               echo ""
               echo "# $(s ${{ steps.stage.outcome }}) Stage:"
-              echo "cpack --preset ${{ matrix.name }}-staging"
+              echo "${{ matrix.cmd-stage }}"
             fi
-            if [ -n "${{ matrix.package }}" ]; then
+            if [ -n "${{ matrix.cmd-package }}" ]; then
               echo ""
               echo "# $(s ${{ steps.package.outcome }}) Package:"
-              echo "cpack --preset ${{ matrix.name }}-package"
+              echo "${{ matrix.cmd-package }}"
             fi
             echo ""
             if [ "${{ steps.test.outcome }}" = "skipped" ]; then
