@@ -42,5 +42,13 @@ endif()
 # the whole tree itself).
 if (PROJECT_IS_TOP_LEVEL)
     include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/StagingBootstrap.cmake")
-    opendaq_setup_packaging(VERSION "${PROJECT_VERSION}")  # -> hello-module staging TGZ + metadata
+
+    opendaq_detect_settings()
+    opendaq_detect_package()
+    opendaq_compose_package_triplet()
+    opendaq_compose_package_file_name()
+
+    set(CPACK_GENERATOR "TGZ")
+    set(CPACK_PROJECT_CONFIG_FILE "${CPACK_OPENDAQ_PROJECT_CONFIG}")
+    include(CPack)
 endif()
