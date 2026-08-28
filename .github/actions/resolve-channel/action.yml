@@ -1,0 +1,25 @@
+name: Resolve the channel
+description: The channel this run belongs to -- release/* is stable, everything else is dev.
+
+outputs:
+  channel:
+    description: "stable or dev."
+    value: ${{ steps.channel.outputs.channel }}
+
+runs:
+  using: composite
+  steps:
+    - id: channel
+      shell: bash
+      run: |
+        # a pull request resolves the channel its change will build against, not the one its own
+        # branch would publish to
+        ref="${GITHUB_BASE_REF:-$GITHUB_REF_NAME}"
+
+        case "$ref" in
+          release/*) channel=stable ;;
+          *)         channel=dev    ;;
+        esac
+
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+        echo "$ref -> $channel"
