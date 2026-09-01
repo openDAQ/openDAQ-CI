@@ -224,19 +224,23 @@ The pattern components and their values are listed in the platform naming table:
 | windows-2022 | x86 | msvs | v143 | release |
 | windows-2022 | x86_64 | ninja | clang | release |
 | windows-2022 | x86_64 | ninja | intel-cc | release |
+| windows-11 | armv8 | msvs | v143 | release |
 | ubuntu-20.04 | x86 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
+| ubuntu-20.04 | armv8 | ninja | clang-9 | release |
 | ubuntu-22.04 | x86_64 | ninja | gcc | release |
 | ubuntu-22.04 | armv8 | ninja | gcc | release |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | debug |
+| ubuntu-24.04 | armv8 | ninja | gcc-14 | debug |
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
 | ubuntu-24.04 | x86_64 | ninja | clang-18 | release |
 | ubuntu-24.04 | x86_64 | ninja | intel-cc | release |
-| manylinux_2_28 | x86_64 | ninja | gcc | release |
-| macos-26 | x86_64 | ninja | appleclang | debug |
-| macos-26 | x86_64 | ninja | appleclang | release |
-| macos-26 | armv8 | ninja | appleclang | release |
-| macos-15 | x86_64 | ninja | appleclang | release |
+| manylinux_2_28 | x86_64 | ninja | gcc-14 | release |
+| manylinux_2_28 | armv8 | ninja | gcc-14 | release |
+| macos-26 | x86_64 | ninja | appleclang-17 | debug |
+| macos-26 | x86_64 | ninja | appleclang-17 | release |
+| macos-26 | x86_64 | ninja | appleclang-21 | release |
+| macos-26 | armv8 | ninja | appleclang-21 | release |
 
 Example: `ubuntu-24.04-x86_64-ninja-gcc-14-release`
 
@@ -272,6 +276,9 @@ git checkout <project-url>
 
 # Setup cmake (via jwlawson/actions-setup-cmake@v2)
 # Setup ninja (via seanmiddleditch/gha-setup-ninja@v6; only for Ninja generator jobs)
+
+# Set the environment variables the job config carries, e.g. DEVELOPER_DIR on macOS
+echo "<key>=<value>" >> "$GITHUB_ENV"
 
 # Install packages: ubuntu
 sudo apt-get install -y <apt-packages>
