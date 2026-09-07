@@ -54,17 +54,27 @@ jobs:
       - name: Generate matrix
         id: matrix
         shell: python3 {0}
+        # the inputs come through the environment: a run block that interpolates them is a
+        # template, and templates are capped at 21000 characters
+        env:
+          INCLUDE_JOBS:   ${{ inputs.include-jobs }}
+          EXCLUDE_JOBS:   ${{ inputs.exclude-jobs }}
+          PACKAGES:       ${{ inputs.packages }}
+          CMAKE_PRESETS:  ${{ inputs.cmake-presets }}
+          UPLOAD_PATTERN: ${{ inputs.upload-pattern }}
+          TIMEOUT:        ${{ inputs.timeout }}
+          CPACK_PRESETS:  ${{ inputs.cpack-presets }}
         run: |
           import json, os
           from fnmatch import fnmatch
 
-          include_jobs = json.loads(r"""${{ inputs.include-jobs }}""")
-          exclude_jobs = json.loads(r"""${{ inputs.exclude-jobs }}""")
-          user_packages = json.loads(r"""${{ inputs.packages }}""")
-          cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
-          upload_pattern = """${{ inputs.upload-pattern }}"""
-          timeout_configs = json.loads(r"""${{ inputs.timeout }}""")
-          cpack_presets = json.loads(r"""${{ inputs.cpack-presets }}""")
+          include_jobs = json.loads(os.environ["INCLUDE_JOBS"])
+          exclude_jobs = json.loads(os.environ["EXCLUDE_JOBS"])
+          user_packages = json.loads(os.environ["PACKAGES"])
+          cmake_presets = json.loads(os.environ["CMAKE_PRESETS"])
+          upload_pattern = os.environ["UPLOAD_PATTERN"]
+          timeout_configs = json.loads(os.environ["TIMEOUT"])
+          cpack_presets = json.loads(os.environ["CPACK_PRESETS"])
 
           print(f"Input: include-jobs = {json.dumps(include_jobs) if include_jobs else 'None'}")
           print(f"Input: exclude-jobs = {json.dumps(exclude_jobs) if exclude_jobs else 'None'}")
