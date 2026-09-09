@@ -280,7 +280,9 @@ jobs:
 
               "macos-26-x86_64-ninja-appleclang-17-debug":   {**_macos_26_x86_64_ninja,     **_apple_clang_17,                            "build-type": "Debug"},
               "macos-26-x86_64-ninja-appleclang-17-release": {**_macos_26_x86_64_ninja,     **_apple_clang_17,                            "build-type": "Release"},
+              "macos-26-x86_64-ninja-appleclang-21-debug":   {**_macos_26_x86_64_ninja,     **_apple_clang_21,                            "build-type": "Debug"},
               "macos-26-x86_64-ninja-appleclang-21-release": {**_macos_26_x86_64_ninja,     **_apple_clang_21,                            "build-type": "Release"},
+              "macos-26-armv8-ninja-appleclang-21-debug":    {**_macos_26_armv8_ninja,      **_apple_clang_21,                            "build-type": "Debug"},
               "macos-26-armv8-ninja-appleclang-21-release":  {**_macos_26_armv8_ninja,      **_apple_clang_21,                            "build-type": "Release"},
           }
 

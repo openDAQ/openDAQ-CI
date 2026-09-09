@@ -239,7 +239,9 @@ The pattern components and their values are listed in the platform naming table:
 | manylinux_2_28 | armv8 | ninja | gcc-14 | release |
 | macos-26 | x86_64 | ninja | appleclang-17 | debug |
 | macos-26 | x86_64 | ninja | appleclang-17 | release |
+| macos-26 | x86_64 | ninja | appleclang-21 | debug |
 | macos-26 | x86_64 | ninja | appleclang-21 | release |
+| macos-26 | armv8 | ninja | appleclang-21 | debug |
 | macos-26 | armv8 | ninja | appleclang-21 | release |
 
 Example: `ubuntu-24.04-x86_64-ninja-gcc-14-release`
