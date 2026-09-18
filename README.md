@@ -189,6 +189,14 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #     }
     #   ]
     timeout: ''
+
+    # Cache the sources FetchContent downloads (build/.deps) between runs.
+    # The cache key is the job name without its build type plus a hash of the files that pin
+    # the dependencies: external/**, external_modules/**, opendaq_ref, CMakeLists.txt.
+    # A partial match restores the previous tree; changed pins are re-fetched by CMake.
+    # Format: boolean
+    # Optional: false default
+    cache-externals: ''
 ```
 
 ### Outputs
