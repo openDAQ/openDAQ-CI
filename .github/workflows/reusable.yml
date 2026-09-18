@@ -35,6 +35,10 @@ on:
         description: 'JSON array of cpack preset configs. A job declares its outputs as lists, so one build yields several component-scoped packages: "stagings": [{"name": "core", "variables": {...}, "package-preset": "..."}] and, likewise, "installers": [{"name": "core", "package": "DEB", "variables": {...}}]. Each named package becomes a <job>-staging-<name> (TGZ) or <job>-package-<name> packagePreset that cpacks into its own subdir <staging|package-dir>/<name>, all inside the single staging-<job> / package-<job> artifact. Packages merge by name across matching entries (variables update, package/package-preset last-wins), e.g. a ["*"] entry sets common variables and a ["ubuntu-*"] entry adds the DEB installer. "variables" pass CPack vars; "package-preset" names a project packagePreset to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
         type: string
         default: '[]'
+      cache-externals:
+        description: "Cache the sources FetchContent downloads between runs. Restored per job (without build type); saved under a key derived from the URLs, hashes and git refs CMake recorded while fetching, so it changes exactly when a pin changes."
+        type: boolean
+        default: false
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -293,6 +297,7 @@ jobs:
 
           # output dirs shared across presets + ci steps (single source of truth)
           build_dir = "build/output"     # configure preset binaryDir
+          externals_dir = "build/.deps"  # FetchContent downloads, cached by cache-externals
           staging_dir = "build/staging"  # cpack staging tarball output
           package_dir = "build/package"  # cpack native installer output
           matrix = []
@@ -457,8 +462,13 @@ jobs:
                   intel_cc_install_cmd = ic["fmt-install"].format(sudo=sudo, components=components, extra=ic["extra"]).strip()
                   source_cmd           = ic["fmt-source"].format(setvars=ic["setvars"])
 
+              build_type_suffix = f"-{build_type.lower()}" if build_type else ""
+              externals_cache_key = job_name[:-len(build_type_suffix)] if build_type_suffix and job_name.endswith(build_type_suffix) else job_name
+
               matrix.append({
                   "name": job_name,
+                  "externals-cache-key": externals_cache_key,
+                  "externals-dir": externals_dir,
                   "runner": runner,
                   "image": image,
                   "build-dir": build_dir,
@@ -511,6 +521,7 @@ jobs:
 
           cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           matrix = json.loads(r"""${{ steps.matrix.outputs.matrix }}""")["include"]
+          cache_externals = "${{ inputs.cache-externals }}" == "true"
 
           print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
 
@@ -519,6 +530,7 @@ jobs:
           for entry in matrix:
               name = entry["name"]
               build_dir = entry["build-dir"]
+              externals_dir = entry["externals-dir"]
               staging_dir = entry["staging-dir"]
               package_dir = entry["package-dir"]
               build_type = entry.get("build-type") or ""
@@ -552,6 +564,8 @@ jobs:
                   **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
+                      # FETCHCONTENT_EXTERNALS_DIR: the openDAQ cmake-utils place their dependencies there (src/, subbuild/) instead of the FetchContent base directory
+                      **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/" + externals_dir, "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/" + externals_dir, "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"} if cache_externals else {}),
                       **cache_vars,
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
                       **({"CMAKE_C_COMPILER": cc} if cc else {}),
@@ -819,9 +833,46 @@ jobs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")
 
+      # The exact key is only known after configure (see below), so restore takes the newest entry
+      # saved for this job. A stale entry costs one re-download: FetchContent's download stamps depend
+      # on the declared URL, hash and git ref, so anything that changed is fetched again.
+      - name: Restore externals cache
+        id: restore-externals
+        if: inputs.cache-externals
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ matrix.externals-dir }}
+            !${{ matrix.externals-dir }}/*-build
+          key: externals-1-${{ matrix.externals-cache-key }}-
+          restore-keys: externals-1-${{ matrix.externals-cache-key }}-
+
       - name: Configure
         id: configure
         run: cmake --preset ${{ matrix.name }}
+
+      # Keyed on what CMake recorded while fetching (each dependency's URL, hash or git ref), so the key
+      # changes exactly when a pin changes, whatever the calling repository looks like. The number
+      # versions the directory layout; bump it when the cached tree changes shape.
+      - name: Compute externals cache key
+        id: externals-key
+        if: inputs.cache-externals && steps.configure.outcome == 'success'
+        shell: bash
+        run: |
+          hash="${{ hashFiles(format('{0}/**/*-gitinfo.txt', matrix.externals-dir), format('{0}/**/*-hginfo.txt', matrix.externals-dir), format('{0}/**/download-*.cmake', matrix.externals-dir)) }}"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+          echo "key=externals-1-${{ matrix.externals-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
+
+      # Saved right after a successful configure: a failed build still fills the cache, a failed
+      # download never saves a half-populated tree.
+      - name: Save externals cache
+        if: inputs.cache-externals && steps.configure.outcome == 'success' && steps.externals-key.outputs.hash != '' && steps.restore-externals.outputs.cache-matched-key != steps.externals-key.outputs.key
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ matrix.externals-dir }}
+            !${{ matrix.externals-dir }}/*-build
+          key: ${{ steps.externals-key.outputs.key }}
 
       - name: Build
         id: build

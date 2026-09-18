@@ -189,6 +189,14 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #     }
     #   ]
     timeout: ''
+
+    # Cache the sources FetchContent downloads between runs.
+    # Restored per job (without build type) from the newest saved entry; saved under a key derived
+    # from the URLs, hashes and git refs CMake recorded while fetching, so it changes exactly when a
+    # pin changes. A stale entry costs one re-download: CMake re-fetches whatever no longer matches.
+    # Format: boolean
+    # Optional: false default
+    cache-externals: ''
 ```
 
 ### Outputs
