@@ -35,6 +35,10 @@ on:
         description: 'JSON array of cpack preset configs. A job declares its outputs as lists, so one build yields several component-scoped packages: "stagings": [{"name": "core", "variables": {...}, "package-preset": "..."}] and, likewise, "installers": [{"name": "core", "package": "DEB", "variables": {...}}]. Each named package becomes a <job>-staging-<name> (TGZ) or <job>-package-<name> packagePreset that cpacks into its own subdir <staging|package-dir>/<name>, all inside the single staging-<job> / package-<job> artifact. Packages merge by name across matching entries (variables update, package/package-preset last-wins), e.g. a ["*"] entry sets common variables and a ["ubuntu-*"] entry adds the DEB installer. "variables" pass CPack vars; "package-preset" names a project packagePreset to inherit. e.g. variables {"CPACK_COMPONENTS_ALL": "core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_DEB_COMPONENT_INSTALL": "ON"}.'
         type: string
         default: '[]'
+      cache-externals:
+        description: "Cache the sources FetchContent downloads under build/.deps between runs. Keyed on the job (without build type) and the files that pin the dependencies: external/**, external_modules/**, opendaq_ref, CMakeLists.txt."
+        type: boolean
+        default: false
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -457,8 +461,12 @@ jobs:
                   intel_cc_install_cmd = ic["fmt-install"].format(sudo=sudo, components=components, extra=ic["extra"]).strip()
                   source_cmd           = ic["fmt-source"].format(setvars=ic["setvars"])
 
+              build_type_suffix = f"-{build_type.lower()}" if build_type else ""
+              externals_cache_key = job_name[:-len(build_type_suffix)] if build_type_suffix and job_name.endswith(build_type_suffix) else job_name
+
               matrix.append({
                   "name": job_name,
+                  "externals-cache-key": externals_cache_key,
                   "runner": runner,
                   "image": image,
                   "build-dir": build_dir,
@@ -511,6 +519,7 @@ jobs:
 
           cmake_presets = json.loads(r"""${{ inputs.cmake-presets }}""")
           matrix = json.loads(r"""${{ steps.matrix.outputs.matrix }}""")["include"]
+          cache_externals = "${{ inputs.cache-externals }}" == "true"
 
           print(f"Input: cmake-presets = {json.dumps(cmake_presets) if cmake_presets else 'None'}")
 
@@ -552,6 +561,8 @@ jobs:
                   **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
+                      # FETCHCONTENT_EXTERNALS_DIR: the openDAQ cmake-utils place their dependencies there (src/, subbuild/) instead of the FetchContent base directory
+                      **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/build/.deps", "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/build/.deps", "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"} if cache_externals else {}),
                       **cache_vars,
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
                       **({"CMAKE_C_COMPILER": cc} if cc else {}),
@@ -819,9 +830,33 @@ jobs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")
 
+      - name: Restore externals cache
+        id: restore-externals
+        if: inputs.cache-externals
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/.deps
+            !build/.deps/*-build
+          key: externals-1-${{ matrix.externals-cache-key }}-${{ hashFiles('external/**', 'external_modules/**', 'opendaq_ref', 'CMakeLists.txt') }}
+          restore-keys: externals-1-${{ matrix.externals-cache-key }}-
+
       - name: Configure
         id: configure
         run: cmake --preset ${{ matrix.name }}
+
+      # The number in the key versions the directory layout; bump it when the cached tree changes shape.
+      # Saved right after a successful configure: a failed build still fills the cache, a failed
+      # download never saves a half-populated tree. A changed pin re-fetches on its own, since
+      # FetchContent's download stamps depend on the declared URL, hash and git ref.
+      - name: Save externals cache
+        if: inputs.cache-externals && steps.configure.outcome == 'success' && steps.restore-externals.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/.deps
+            !build/.deps/*-build
+          key: ${{ steps.restore-externals.outputs.cache-primary-key }}
 
       - name: Build
         id: build
