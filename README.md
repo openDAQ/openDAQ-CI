@@ -197,6 +197,14 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     # Format: boolean
     # Optional: false default
     cache-externals: ''
+
+    # Cache the binary archives vcpkg builds while the packages "run" command executes, so that
+    # e.g. OpenSSL on the Windows lanes is unpacked instead of rebuilt. Restored per job (without
+    # build type) and vcpkg revision of the runner image; vcpkg matches archives by its own ABI hash,
+    # so a stale entry only means rebuilding what changed.
+    # Format: boolean
+    # Optional: false default
+    cache-vcpkg: ''
 ```
 
 ### Outputs

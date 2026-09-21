@@ -39,6 +39,10 @@ on:
         description: "Cache the sources FetchContent downloads between runs. Restored per job (without build type); saved under a key derived from the URLs, hashes and git refs CMake recorded while fetching, so it changes exactly when a pin changes."
         type: boolean
         default: false
+      cache-vcpkg:
+        description: "Cache the binary archives vcpkg builds while the packages run command executes (Windows lanes install OpenSSL this way). Restored per job (without build type) and vcpkg revision; vcpkg matches archives by its own ABI hash, so a stale entry only means rebuilding what changed."
+        type: boolean
+        default: false
     outputs:
       matrix:
         description: "Generated build matrix JSON"
@@ -463,11 +467,11 @@ jobs:
                   source_cmd           = ic["fmt-source"].format(setvars=ic["setvars"])
 
               build_type_suffix = f"-{build_type.lower()}" if build_type else ""
-              externals_cache_key = job_name[:-len(build_type_suffix)] if build_type_suffix and job_name.endswith(build_type_suffix) else job_name
+              job_cache_key = job_name[:-len(build_type_suffix)] if build_type_suffix and job_name.endswith(build_type_suffix) else job_name  # cache entries are shared across build types
 
               matrix.append({
                   "name": job_name,
-                  "externals-cache-key": externals_cache_key,
+                  "job-cache-key": job_cache_key,
                   "externals-dir": externals_dir,
                   "runner": runner,
                   "image": image,
@@ -747,9 +751,44 @@ jobs:
         if: matrix.cmd-install-pip != ''
         run: ${{ matrix.cmd-install-pip }}
 
+      # vcpkg keeps every package it builds as an archive in VCPKG_DEFAULT_BINARY_CACHE and unpacks it
+      # on the next install instead of building again. The key carries the vcpkg revision of the runner
+      # image: a new image saves a fresh entry, and until then the previous one restores by prefix.
+      - name: Compute vcpkg cache key
+        id: vcpkg-key
+        if: inputs.cache-vcpkg && matrix.cmd-run-post-package != ''
+        shell: bash
+        run: |
+          if [ -z "${VCPKG_INSTALLATION_ROOT:-}" ] || ! command -v vcpkg > /dev/null; then
+            echo "vcpkg is not installed on this runner, nothing to cache"
+            exit 0
+          fi
+          rev="$(git -C "$VCPKG_INSTALLATION_ROOT" rev-parse --short=12 HEAD 2> /dev/null || vcpkg version | sha1sum | cut -c1-12)"
+          mkdir -p build/.vcpkg
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$(pwd -W 2> /dev/null || pwd)/build/.vcpkg" >> "$GITHUB_ENV"
+          echo "key=vcpkg-1-${{ matrix.job-cache-key }}-$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        if: steps.vcpkg-key.outputs.key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: build/.vcpkg
+          key: ${{ steps.vcpkg-key.outputs.key }}
+          restore-keys: vcpkg-1-${{ matrix.job-cache-key }}-
+
       - name: Run post-package
+        id: post-package
         if: matrix.cmd-run-post-package != ''
         run: ${{ matrix.cmd-run-post-package }}
+
+      # Nothing to save after an exact hit (entries are immutable) or when vcpkg built nothing.
+      - name: Save vcpkg cache
+        if: steps.vcpkg-key.outputs.key != '' && steps.post-package.outcome == 'success' && steps.restore-vcpkg.outputs.cache-hit != 'true' && hashFiles('build/.vcpkg/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/.vcpkg
+          key: ${{ steps.vcpkg-key.outputs.key }}
 
       - name: Write CI presets
         shell: bash
@@ -844,8 +883,8 @@ jobs:
           path: |
             ${{ matrix.externals-dir }}
             !${{ matrix.externals-dir }}/*-build
-          key: externals-1-${{ matrix.externals-cache-key }}-
-          restore-keys: externals-1-${{ matrix.externals-cache-key }}-
+          key: externals-1-${{ matrix.job-cache-key }}-
+          restore-keys: externals-1-${{ matrix.job-cache-key }}-
 
       - name: Configure
         id: configure
@@ -861,7 +900,7 @@ jobs:
         run: |
           hash="${{ hashFiles(format('{0}/**/*-gitinfo.txt', matrix.externals-dir), format('{0}/**/*-hginfo.txt', matrix.externals-dir), format('{0}/**/download-*.cmake', matrix.externals-dir)) }}"
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
-          echo "key=externals-1-${{ matrix.externals-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
+          echo "key=externals-1-${{ matrix.job-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
 
       # Saved right after a successful configure: a failed build still fills the cache, a failed
       # download never saves a half-populated tree.
