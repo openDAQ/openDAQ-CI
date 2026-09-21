@@ -36,11 +36,11 @@ on:
         type: string
         default: '[]'
       cache-externals:
-        description: "Cache the sources FetchContent downloads between runs. Restored per job (without build type); saved under a key derived from the URLs, hashes and git refs CMake recorded while fetching, so it changes exactly when a pin changes."
+        description: "Cache the sources FetchContent downloads between runs. Restored per job; saved under a key derived from the URLs, hashes and git refs CMake recorded while fetching."
         type: boolean
         default: false
       cache-vcpkg:
-        description: "Cache the binary archives vcpkg builds while the packages run command executes (Windows lanes install OpenSSL this way). Restored per job (without build type) and vcpkg revision; vcpkg matches archives by its own ABI hash, so a stale entry only means rebuilding what changed."
+        description: "Cache the binary archives vcpkg builds while the packages run command executes. Restored per job and vcpkg revision; vcpkg matches archives by its own ABI hash."
         type: boolean
         default: false
     outputs:
@@ -568,7 +568,7 @@ jobs:
                   **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
-                      # FETCHCONTENT_EXTERNALS_DIR: the openDAQ cmake-utils place their dependencies there (src/, subbuild/) instead of the FetchContent base directory
+                      # Point FetchContent and the openDAQ cmake-utils at the cached externals directory
                       **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/" + externals_dir, "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/" + externals_dir, "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"} if cache_externals else {}),
                       **cache_vars,
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
@@ -752,8 +752,7 @@ jobs:
         run: ${{ matrix.cmd-install-pip }}
 
       # vcpkg keeps every package it builds as an archive in VCPKG_DEFAULT_BINARY_CACHE and unpacks it
-      # on the next install instead of building again. The key carries the vcpkg revision of the runner
-      # image: a new image saves a fresh entry, and until then the previous one restores by prefix.
+      # on the next install instead of building again.
       - name: Compute vcpkg cache key
         id: vcpkg-key
         if: inputs.cache-vcpkg && matrix.cmd-run-post-package != ''
@@ -782,7 +781,7 @@ jobs:
         if: matrix.cmd-run-post-package != ''
         run: ${{ matrix.cmd-run-post-package }}
 
-      # Nothing to save after an exact hit (entries are immutable) or when vcpkg built nothing.
+      # Do not save after an exact hit or when vcpkg built nothing.
       - name: Save vcpkg cache
         if: steps.vcpkg-key.outputs.key != '' && steps.post-package.outcome == 'success' && steps.restore-vcpkg.outputs.cache-hit != 'true' && hashFiles('build/.vcpkg/**') != ''
         uses: actions/cache/save@v4
@@ -872,9 +871,7 @@ jobs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")
 
-      # The exact key is only known after configure (see below), so restore takes the newest entry
-      # saved for this job. A stale entry costs one re-download: FetchContent's download stamps depend
-      # on the declared URL, hash and git ref, so anything that changed is fetched again.
+      # Restores the newest entry for this job. A stale entry is fine: CMake re-fetches whatever no longer matches its pin.
       - name: Restore externals cache
         id: restore-externals
         if: inputs.cache-externals
@@ -890,9 +887,8 @@ jobs:
         id: configure
         run: cmake --preset ${{ matrix.name }}
 
-      # Keyed on what CMake recorded while fetching (each dependency's URL, hash or git ref), so the key
-      # changes exactly when a pin changes, whatever the calling repository looks like. The number
-      # versions the directory layout; bump it when the cached tree changes shape.
+      # Hashes the URL, hash or git ref CMake recorded for every dependency, so the key changes exactly when a pin changes.
+      # Bump the number in the key when the cached directory layout changes.
       - name: Compute externals cache key
         id: externals-key
         if: inputs.cache-externals && steps.configure.outcome == 'success'
@@ -902,8 +898,7 @@ jobs:
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
           echo "key=externals-1-${{ matrix.job-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
 
-      # Saved right after a successful configure: a failed build still fills the cache, a failed
-      # download never saves a half-populated tree.
+      # Saving right after configure fills the cache even if the build fails later.
       - name: Save externals cache
         if: inputs.cache-externals && steps.configure.outcome == 'success' && steps.externals-key.outputs.hash != '' && steps.restore-externals.outputs.cache-matched-key != steps.externals-key.outputs.key
         uses: actions/cache/save@v4
