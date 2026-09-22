@@ -296,7 +296,7 @@ jobs:
 
           # output dirs shared across presets + ci steps (single source of truth)
           build_dir = "build/output"     # configure preset binaryDir
-          externals_dir = "build/.deps"  # FetchContent downloads, cached when cmake-presets sets cache-externals
+          externals_dir = "build/.deps"  # FetchContent downloads when cmake-presets sets cache-externals: true
           staging_dir = "build/staging"  # cpack staging tarball output
           package_dir = "build/package"  # cpack native installer output
           matrix = []
@@ -400,6 +400,9 @@ jobs:
                       test_preset = entry.get("test-preset", test_preset)
                       run_tests_priv = entry.get("run-tests-priv", run_tests_priv)
                       cache_externals = entry.get("cache-externals", cache_externals)
+
+              # true caches the default directory, a path caches that directory instead
+              cache_externals_dir = externals_dir if cache_externals is True else (cache_externals or "")
               
               cmd_run_tests_priv = f"sudo -E " if run_tests_priv and sudo else ""
               
@@ -472,7 +475,7 @@ jobs:
               matrix.append({
                   "name": job_name,
                   "job-cache-key": job_cache_key,
-                  "externals-dir": externals_dir if cache_externals else "",
+                  "cache-externals": cache_externals_dir,
                   "vcpkg-triplet": vcpkg_triplet if install_cmds.get("cmd-install-vcpkg") else "",
                   "runner": runner,
                   "image": image,
@@ -534,7 +537,7 @@ jobs:
           for entry in matrix:
               name = entry["name"]
               build_dir = entry["build-dir"]
-              externals_dir = entry["externals-dir"]
+              cache_externals_dir = entry.get("cache-externals") or ""
               staging_dir = entry["staging-dir"]
               package_dir = entry["package-dir"]
               build_type = entry.get("build-type") or ""
@@ -560,6 +563,10 @@ jobs:
                       cache_vars.update(entry.get("cache-variables", {}))
                       build_targets = entry.get("build-targets", build_targets)
 
+              if cache_externals_dir and {"FETCHCONTENT_BASE_DIR", "FETCHCONTENT_EXTERNALS_DIR"} & set(cache_vars):
+                  print(f"::error::Matrix job '{name}': set the externals directory through cache-externals, not through cache-variables")
+                  raise SystemExit(1)
+
               user_presets["configurePresets"].append({
                   "name": name,
                   **({"inherits": [configure_preset]} if configure_preset else {}),
@@ -568,9 +575,9 @@ jobs:
                   **({"architecture": architecture} if architecture else {}),
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
-                      # Point FetchContent and the openDAQ cmake-utils at the cached externals directory
-                      **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/" + externals_dir, "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/" + externals_dir} if externals_dir else {}),
                       **cache_vars,
+                      # Point FetchContent and the openDAQ cmake-utils at the cached externals directory
+                      **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/" + cache_externals_dir, "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/" + cache_externals_dir} if cache_externals_dir else {}),
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
                       **({"CMAKE_C_COMPILER": cc} if cc else {}),
                       **({"CMAKE_CXX_COMPILER": cxx} if cxx else {}),
@@ -878,12 +885,12 @@ jobs:
       # A stale entry is fine: CMake re-fetches whatever no longer matches its pin.
       - name: Restore externals cache
         id: restore-externals
-        if: matrix.externals-dir != ''
+        if: matrix.cache-externals != ''
         uses: actions/cache/restore@v4
         with:
           path: |
-            ${{ matrix.externals-dir }}
-            !${{ matrix.externals-dir }}/*-build
+            ${{ matrix.cache-externals }}
+            !${{ matrix.cache-externals }}/*-build
           key: externals-1-${{ matrix.job-cache-key }}-
           restore-keys: externals-1-${{ matrix.job-cache-key }}-
 
@@ -895,21 +902,21 @@ jobs:
       # Bump the 1 in either cache key when its directory layout changes.
       - name: Compute externals cache key
         id: externals-key
-        if: matrix.externals-dir != ''
+        if: matrix.cache-externals != ''
         shell: bash
         run: |
-          hash="${{ hashFiles(format('{0}/**/*-gitclone.cmake', matrix.externals-dir), format('{0}/**/*-urlinfo.txt', matrix.externals-dir), format('{0}/**/*-hginfo.txt', matrix.externals-dir)) }}"
+          hash="${{ hashFiles(format('{0}/**/*-gitclone.cmake', matrix.cache-externals), format('{0}/**/*-urlinfo.txt', matrix.cache-externals), format('{0}/**/*-hginfo.txt', matrix.cache-externals)) }}"
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
           echo "key=externals-1-${{ matrix.job-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
 
       # Saves right after Configure so the cache fills even when the build fails later. Skipped when the restored entry already has this key.
       - name: Save externals cache
-        if: matrix.externals-dir != '' && steps.externals-key.outputs.hash != '' && steps.restore-externals.outputs.cache-matched-key != steps.externals-key.outputs.key
+        if: matrix.cache-externals != '' && steps.externals-key.outputs.hash != '' && steps.restore-externals.outputs.cache-matched-key != steps.externals-key.outputs.key
         uses: actions/cache/save@v4
         with:
           path: |
-            ${{ matrix.externals-dir }}
-            !${{ matrix.externals-dir }}/*-build
+            ${{ matrix.cache-externals }}
+            !${{ matrix.cache-externals }}/*-build
           key: ${{ steps.externals-key.outputs.key }}
 
       - name: Build
