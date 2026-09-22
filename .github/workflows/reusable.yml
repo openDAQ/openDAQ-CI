@@ -106,17 +106,20 @@ jobs:
               "fmt-brew-install": "{envs} brew install {pkgs}",
               "fmt-choco-install": "{envs} choco install -y {pkgs}",
               "fmt-winget-install": "{envs} winget install --accept-source-agreements --accept-package-agreements --id {pkgs}",
+              "fmt-vcpkg-install": "vcpkg install --triplet {triplet} {pkgs}",
               "apt-install-default": [],
               "yum-install-default": [],
               "brew-install-default": [],
               "choco-install-default": [],
               "winget-install-default": [],
+              "vcpkg-install-default": [],
               "pip-install-default": [],
               "apt-install": [],
               "yum-install": [],
               "brew-install": [],
               "choco-install": [],
               "winget-install": [],
+              "vcpkg-install": [],
               "pip-install": [],
               "cmd-run-post-package": "",
               "cmd-ctest-priv": "",
@@ -211,7 +214,7 @@ jobs:
           _windows_2022_x86_64 = {
               **_base,
               "runner": "windows-2022",
-              "package-managers": ["choco", "winget", "pip"],
+              "package-managers": ["choco", "winget", "vcpkg", "pip"],
               "fmt-pip-install": "py -{ver}{arch} -m pip install {pkgs}",
               "setup-msvc-toolchain": True,
           }
@@ -293,6 +296,7 @@ jobs:
 
           # output dirs shared across presets + ci steps (single source of truth)
           build_dir = "build/output"     # configure preset binaryDir
+          externals_dir = "build/.deps"  # FetchContent downloads when cmake-presets sets cache-externals: true
           staging_dir = "build/staging"  # cpack staging tarball output
           package_dir = "build/package"  # cpack native installer output
           matrix = []
@@ -364,6 +368,9 @@ jobs:
               python_arch = "x86" if cfg.get("target-arch", "") == "x86" else ""
               py_ver = python_version or "3"
               py_arch = "-32" if python_arch == "x86" else ""
+              vcpkg_os = {"windows": "windows", "ubuntu": "linux", "macos": "osx"}[runner.split("-")[0]]
+              vcpkg_arch = {"": "x64", "x86": "x86", "armv8": "arm64"}[cfg.get("target-arch") or ""]
+              vcpkg_triplet = f"{vcpkg_arch}-{vcpkg_os}"
 
               # merge and build install commands per package manager
               install_cmds = {}
@@ -376,7 +383,7 @@ jobs:
                           print(f"::error::Matrix job '{job_name}': 'fmt-{pm}-install' is not defined but packages {install} are requested")
                           continue
 
-                      fmt_args = dict(sudo=sudo, envs=envs, ver=py_ver, arch=py_arch)
+                      fmt_args = dict(sudo=sudo, envs=envs, ver=py_ver, arch=py_arch, triplet=vcpkg_triplet)
                       if pm == "winget":
                           install_cmds["cmd-install-winget"] = "; ".join(fmt.format(pkgs=pkg, **fmt_args).strip() for pkg in install)
                       else:
@@ -384,13 +391,18 @@ jobs:
 
               install_cmds["cmd-run-post-package"] = user_pkgs.get("run", "")
 
-              # find test-preset and run-tests-priv for this job
+              # find test-preset, run-tests-priv and cache-externals for this job
               test_preset = ""
               run_tests_priv = False
+              cache_externals = False
               for entry in cmake_presets:
                   if matches_any(job_name, entry.get("match-jobs", ["*"])):
                       test_preset = entry.get("test-preset", test_preset)
                       run_tests_priv = entry.get("run-tests-priv", run_tests_priv)
+                      cache_externals = entry.get("cache-externals", cache_externals)
+
+              # true caches the default directory, a path caches that directory instead
+              cache_externals_dir = externals_dir if cache_externals is True else (cache_externals or "")
               
               cmd_run_tests_priv = f"sudo -E " if run_tests_priv and sudo else ""
               
@@ -457,8 +469,14 @@ jobs:
                   intel_cc_install_cmd = ic["fmt-install"].format(sudo=sudo, components=components, extra=ic["extra"]).strip()
                   source_cmd           = ic["fmt-source"].format(setvars=ic["setvars"])
 
+              build_type_suffix = f"-{build_type.lower()}" if build_type else ""
+              job_cache_key = job_name[:-len(build_type_suffix)] if build_type_suffix and job_name.endswith(build_type_suffix) else job_name  # cache entries are shared across build types
+
               matrix.append({
                   "name": job_name,
+                  "job-cache-key": job_cache_key,
+                  "cache-externals": cache_externals_dir,
+                  "vcpkg-triplet": vcpkg_triplet if install_cmds.get("cmd-install-vcpkg") else "",
                   "runner": runner,
                   "image": image,
                   "build-dir": build_dir,
@@ -519,6 +537,7 @@ jobs:
           for entry in matrix:
               name = entry["name"]
               build_dir = entry["build-dir"]
+              cache_externals_dir = entry.get("cache-externals") or ""
               staging_dir = entry["staging-dir"]
               package_dir = entry["package-dir"]
               build_type = entry.get("build-type") or ""
@@ -544,6 +563,10 @@ jobs:
                       cache_vars.update(entry.get("cache-variables", {}))
                       build_targets = entry.get("build-targets", build_targets)
 
+              if cache_externals_dir and {"FETCHCONTENT_BASE_DIR", "FETCHCONTENT_EXTERNALS_DIR"} & set(cache_vars):
+                  print(f"::error::Matrix job '{name}': set the externals directory through cache-externals, not through cache-variables")
+                  raise SystemExit(1)
+
               user_presets["configurePresets"].append({
                   "name": name,
                   **({"inherits": [configure_preset]} if configure_preset else {}),
@@ -553,6 +576,8 @@ jobs:
                   "binaryDir": "$" + "{sourceDir}" + f"/{build_dir}",
                   "cacheVariables": {
                       **cache_vars,
+                      # Point FetchContent and the openDAQ cmake-utils at the cached externals directory
+                      **({"FETCHCONTENT_BASE_DIR": "$" + "{sourceDir}/" + cache_externals_dir, "FETCHCONTENT_EXTERNALS_DIR": "$" + "{sourceDir}/" + cache_externals_dir} if cache_externals_dir else {}),
                       **({"CMAKE_BUILD_TYPE": build_type} if build_type else {}),
                       **({"CMAKE_C_COMPILER": cc} if cc else {}),
                       **({"CMAKE_CXX_COMPILER": cxx} if cxx else {}),
@@ -718,6 +743,43 @@ jobs:
         if: matrix.cmd-install-winget != ''
         run: ${{ matrix.cmd-install-winget }}
 
+      # vcpkg keeps every package it builds as an archive in VCPKG_DEFAULT_BINARY_CACHE and unpacks it
+      # on the next install instead of building again.
+      - name: Compute vcpkg cache key
+        id: vcpkg-key
+        if: matrix.cmd-install-vcpkg != ''
+        shell: bash
+        run: |
+          rev="$(git -C "$VCPKG_INSTALLATION_ROOT" rev-parse --short=12 HEAD 2> /dev/null || vcpkg version | sha1sum | cut -c1-12)"
+          mkdir -p build/.vcpkg
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$(pwd -W 2> /dev/null || pwd)/build/.vcpkg" >> "$GITHUB_ENV"
+          echo "key=vcpkg-1-${{ matrix.job-cache-key }}-$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        if: matrix.cmd-install-vcpkg != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: build/.vcpkg
+          key: ${{ steps.vcpkg-key.outputs.key }}
+          restore-keys: vcpkg-1-${{ matrix.job-cache-key }}-
+
+      # The installed binaries go on PATH so the tests find their DLLs.
+      - name: Install dependencies (vcpkg)
+        if: matrix.cmd-install-vcpkg != ''
+        shell: bash
+        run: |
+          ${{ matrix.cmd-install-vcpkg }}
+          echo "$VCPKG_INSTALLATION_ROOT/installed/${{ matrix.vcpkg-triplet }}/bin" >> "$GITHUB_PATH"
+
+      # Skips the save after an exact hit or when vcpkg built nothing.
+      - name: Save vcpkg cache
+        if: matrix.cmd-install-vcpkg != '' && steps.restore-vcpkg.outputs.cache-hit != 'true' && hashFiles('build/.vcpkg/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/.vcpkg
+          key: ${{ steps.vcpkg-key.outputs.key }}
+
       - name: Setup Python (GitHub Actions)
         if: matrix.image == '' && matrix.python-version != ''
         uses: actions/setup-python@v6
@@ -819,9 +881,43 @@ jobs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")
 
+      # The exact key is only known after Configure, so both keys are the job prefix and the newest entry wins.
+      # A stale entry is fine: CMake re-fetches whatever no longer matches its pin.
+      - name: Restore externals cache
+        id: restore-externals
+        if: matrix.cache-externals != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ matrix.cache-externals }}
+            !${{ matrix.cache-externals }}/*-build
+          key: externals-1-${{ matrix.job-cache-key }}-
+          restore-keys: externals-1-${{ matrix.job-cache-key }}-
+
       - name: Configure
         id: configure
         run: cmake --preset ${{ matrix.name }}
+
+      # Hashes the git ref, URL or archive hash CMake recorded for every dependency, so the key changes exactly when a pin changes.
+      # Bump the 1 in either cache key when its directory layout changes.
+      - name: Compute externals cache key
+        id: externals-key
+        if: matrix.cache-externals != ''
+        shell: bash
+        run: |
+          hash="${{ hashFiles(format('{0}/**/*-gitclone.cmake', matrix.cache-externals), format('{0}/**/*-urlinfo.txt', matrix.cache-externals), format('{0}/**/*-hginfo.txt', matrix.cache-externals)) }}"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+          echo "key=externals-1-${{ matrix.job-cache-key }}-$hash" >> "$GITHUB_OUTPUT"
+
+      # Saves right after Configure so the cache fills even when the build fails later. Skipped when the restored entry already has this key.
+      - name: Save externals cache
+        if: matrix.cache-externals != '' && steps.externals-key.outputs.hash != '' && steps.restore-externals.outputs.cache-matched-key != steps.externals-key.outputs.key
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ matrix.cache-externals }}
+            !${{ matrix.cache-externals }}/*-build
+          key: ${{ steps.externals-key.outputs.key }}
 
       - name: Build
         id: build

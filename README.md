@@ -65,6 +65,8 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #   brew-install   — brew packages (optional, collect)
     #   choco-install  — choco packages (optional, collect)
     #   winget-install     — winget packages (optional, collect)
+    #   vcpkg-install      — vcpkg packages (optional, collect; triplet from the job OS and arch,
+    #                        installed/<triplet>/bin goes on PATH, built archives cached between runs)
     #   use-python-version — specific Python version (optional, last match wins)
     #                        e.g. "3.12"; pip install uses this interpreter
     #   run                — run after packages setup (optional, last match wins)
@@ -112,6 +114,10 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #                      useful for tests that bind to privileged ports on macOS
     #   cache-variables  — extra CMake cache variables (optional, dict, merged across matches)
     #                      CMAKE_BUILD_TYPE, CMAKE_C_COMPILER, CMAKE_CXX_COMPILER are reserved
+    #   cache-externals  — cache the FetchContent sources between runs (optional, last match wins)
+    #                      true caches build/.deps, a path caches that directory instead; FetchContent
+    #                      is pointed there, so leave FETCHCONTENT_*_DIR out of cache-variables;
+    #                      restored per job without build type, saved under the dependency pins
     # Optional: [] empty, no configuration inherited, no tests run
     # Example: >
     #   [
@@ -256,9 +262,9 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 
 **Exclude filtering.** After include filtering, each job name is matched against `exclude-jobs` patterns. Filters are applied until the first match — if a match is found, the job is excluded from the matrix.
 
-**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed. The `artifacts` field lists dependency stagings to consume — for each entry, every artifact matching the `name` glob is downloaded and extracted into `dir` before the configure step, so the build resolves the staged dependencies via `find_package`; the caller points `CMAKE_PREFIX_PATH` at that directory through `cmake-presets` `cache-variables`.
+**Package resolution.** The `packages` array is iterated in order. For each entry, the `match-jobs` filter is applied to the job name — if it matches, the corresponding package lists are appended to the packages that will be installed during that job's execution. The `run` command, if specified, is executed after package installation; each subsequent match overrides the previous — last match wins. `vcpkg-install` packages are installed for the job's triplet (OS and architecture, e.g. `x86-windows`), `installed/<triplet>/bin` is added to `PATH`, and the archives vcpkg builds are kept in the actions cache so a later run unpacks e.g. OpenSSL instead of rebuilding it. The `run` value can be a direct command or a path (absolute or relative to the working directory) to a shell script within the project repository. The `use-python-version` field requests a specific Python interpreter for the job (last match wins); the workflow installs it on the runner and uses it for `pip install` commands. For `windows-*-x86-*` jobs, a 32-bit Python build is installed. The `artifacts` field lists dependency stagings to consume — for each entry, every artifact matching the `name` glob is downloaded and extracted into `dir` before the configure step, so the build resolves the staged dependencies via `find_package`; the caller points `CMAKE_PREFIX_PATH` at that directory through `cmake-presets` `cache-variables`.
 
-**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS. The `cache-variables` field, if specified, contributes extra CMake cache variables to the generated user preset; values are merged across all matching entries (later matches override earlier ones). The reserved variables `CMAKE_BUILD_TYPE`, `CMAKE_C_COMPILER`, and `CMAKE_CXX_COMPILER` cannot be overridden — they are always set by the generated preset to ensure consistent builds across runners. The `build-targets` field, if specified, restricts the build to the listed targets (last match wins) by setting the generated build preset's `targets`, so a job can build a single target — e.g. one wrapper against an installed core — instead of the whole project.
+**Preset mapping.** The `cmake-presets` array is iterated in the same way — each field follows the last-match-wins strategy. If the job name matches the `match-jobs` filter, the configure and test preset names are recorded in the matrix entry to be used as inherited presets in the generated `CMakeUserPresets.json`. If the configure preset is explicitly set to an empty string, the job will run with a default preset containing only the compiler and build type. If no test preset is provided or it is set to an empty string explicitly, tests will not run for that job. When `run-tests-priv` is set to `true`, `ctest` is invoked with elevated privileges (`sudo -E`) — useful for tests that require privileged ports, e.g. on macOS. The `cache-variables` field, if specified, contributes extra CMake cache variables to the generated user preset; values are merged across all matching entries (later matches override earlier ones). The reserved variables `CMAKE_BUILD_TYPE`, `CMAKE_C_COMPILER`, and `CMAKE_CXX_COMPILER` cannot be overridden — they are always set by the generated preset to ensure consistent builds across runners. The `build-targets` field, if specified, restricts the build to the listed targets (last match wins) by setting the generated build preset's `targets`, so a job can build a single target — e.g. one wrapper against an installed core — instead of the whole project. `cache-externals` points FetchContent (`FETCHCONTENT_BASE_DIR` and `FETCHCONTENT_EXTERNALS_DIR`) at `build/.deps`, or at the directory given as its value, and keeps that directory in the actions cache: restored per job (without build type) from the newest entry, saved under a key hashed from the dependency pins, so a pin bump re-fetches only what changed.
 
 **Artifact naming.** GTest results are uploaded as artifacts named `test-results-<job-name>`. If the reusable workflow is called more than once within the same workflow, artifact names will collide and produce an error. To avoid this, pass `upload-pattern` with a `*` placeholder — each call should have its own unique pattern. The `*` is replaced with the original artifact name, e.g. `my-call (*)` renames `test-results-windows-2022-x86_64-msvs-v143-release` into `my-call (test-results-windows-2022-x86_64-msvs-v143-release)`.
 
@@ -291,6 +297,7 @@ brew install <brew-packages>
 # Install packages: windows
 choco install -y <choco-packages>
 winget install --id <winget-package> #; winget install --id <winget-another-package>; <etc>
+vcpkg install --triplet <triplet> <vcpkg-packages>  # archives restored from / saved to the actions cache
 
 # Setup Python (if use-python-version is passed via packages input)
 # - hosted runners: actions/setup-python@v5
@@ -311,7 +318,7 @@ EOF
 # Download + extract dependency stagings (if packages.artifacts is set)
 # into their target dir, e.g. staging-deps/
 
-# Configure
+# Configure (the FetchContent sources are restored before and saved after, if cache-externals via cmake-presets)
 cmake --preset <job-name>
 
 # Build
