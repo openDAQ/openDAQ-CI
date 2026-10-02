@@ -7,8 +7,8 @@ name: Staging Push
 # children: unreachable by name until the index lands, so a set publishes atomically, and the
 # registry refuses an index with a dangling reference.
 #
-#   ghcr.io/opendaq/nightly/staging/opendaq : <sha>, <short-sha>, latest
-#     └─ sha256:index…
+#   ghcr.io/opendaq/nightly/staging/opendaq : run-<run id>-<run attempt>, latest
+#     └─ sha256:index…  revision=<commit>  com.opendaq.dependencies.<name>.revision=<commit>
 #        ├─ sha256:a1…  title=opendaq-x86_64-linux-gcc-11-release.tar.gz
 #        │              com.opendaq: platform=linux    settings.arch=x86_64  settings.compiler=gcc   settings.compiler.version=11
 #        └─ sha256:b2…  title=opendaq-x86_64-windows-msvc-143-release.tar.gz
@@ -16,6 +16,11 @@ name: Staging Push
 #
 # A child is named by its file; the com.opendaq.* annotations are optional, and buy a consumer a
 # resolve by settings rather than by file name.
+#
+# The run tag is unique to its index and says nothing more: one commit built against two cores
+# is two indexes, and a tag naming the commit could point at one of them only. What an index was
+# built from is in its annotations -- the commit itself, and the commits of its dependencies,
+# which the children carry in their metadata and the index repeats.
 #
 # NEVER prune "untagged versions" of these packages -- the live children are untagged too.
 # Pruning goes through the index only.
@@ -29,7 +34,7 @@ on:
             {
               "path": "ghcr.io/<org>/path/to/staging",   // the package, in full
               "artifacts": ["staging-*"],                // globs; each match becomes a child of its index
-              "tags": ["latest", "v1.2.3"]               // extra tags; <sha> and <short-sha> are automatic
+              "tags": ["latest", "v1.2.3"]               // extra tags; run-<run id>-<run attempt> is automatic
             },
             {                                            // one entry per kind: a tarball and a .deb are
               "path": "ghcr.io/<org>/path/to/package",   // variants of nothing, so they never share
@@ -61,6 +66,8 @@ jobs:
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
           SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -71,7 +78,7 @@ jobs:
           token    = os.environ["TOKEN"]
           actor    = os.environ["ACTOR"]
           sha      = os.environ["SHA"]
-          short    = sha[:7]
+          run_tag  = f"run-{os.environ['RUN_ID']}-{os.environ['RUN_ATTEMPT']}"   # unique to this publish
           repo     = os.environ["REPO"]
           server   = os.environ["SERVER_URL"]
           created  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")   # push time; staging-cleanup ages by this
@@ -82,7 +89,7 @@ jobs:
           # The registry UI offers `docker pull` for anything it hosts, so both say what they are
           # and how to actually get a package out.
           INDEX_DESC = """Package manifest.
-          1) oras manifest fetch {base}:<commit>
+          1) oras manifest fetch {base}:<tag>
           2) pick an entry of manifests[] by its com.opendaq.* annotations
           3) oras pull {base}@<entry.digest>"""
 
@@ -118,7 +125,7 @@ jobs:
           published = []
           for staging in stagings:
               base = staging["path"].rstrip("/").lower()   # OCI repositories are lowercase
-              tags = list(dict.fromkeys([sha, short] + staging.get("tags", [])))
+              tags = list(dict.fromkeys([run_tag] + staging.get("tags", [])))
               dirs = sorted({d for g in staging["artifacts"]
                                for d in glob.glob(f".artifacts/{g}") if os.path.isdir(d)})
               if not dirs:
@@ -182,11 +189,21 @@ jobs:
                   desc["annotations"] = digest_ann[desc["digest"]]
               index["artifactType"] = INDEX_TYPE
 
+              # what the index was built against: its children agree on it, or it is no one build
+              DEPENDENCIES = "com.opendaq.dependencies."
+              deps = [{k: v for k, v in ann.items() if k.startswith(DEPENDENCIES)}
+                      for ann in digest_ann.values()]
+              if any(d != deps[0] for d in deps):
+                  for name, d in zip(names, deps):
+                      print(f"{name}: {json.dumps(d, sort_keys=True)}")
+                  sys.exit(f"::error::the packages of {base} differ in their {DEPENDENCIES}* annotations")
+
               index["annotations"] = {
                   "org.opencontainers.image.created":     created,
                   "org.opencontainers.image.description": INDEX_DESC.format(base=base),
                   "org.opencontainers.image.revision":    sha,
                   "org.opencontainers.image.source":      f"{server}/{repo}",
+                  **deps[0],
               }
               json.dump(index, open("index.json", "w"), separators=(",", ":"))
               run(["oras", "manifest", "push", "--oci-layout", f"{layout_dir}:index", "index.json",
