@@ -222,10 +222,12 @@ jobs:
           _windows_2022_x86_64_msvs  = {**_windows_2022_x86_64, "generator": "Visual Studio 17 2022"}
           _windows_2022_x86_64_ninja = {**_windows_2022_x86_64, "generator": "Ninja"}
 
-          # the generator drives the arm64 cross toolchain, so no msvc-dev-cmd environment
+          # the generator drives the arm64 cross toolchain, so no msvc-dev-cmd environment;
+          # the image has Visual Studio 2026 only, which carries the v143 toolset as well
           _windows_11_armv8_msvs = {
               **_windows_2022_x86_64_msvs,
               "runner": "windows-11-arm",
+              "generator": "Visual Studio 18 2026",
               "target-arch": "armv8",
               "setup-msvc-toolchain": False,
           }
