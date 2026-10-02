@@ -9,7 +9,7 @@ if (NOT COMMAND opendaq_write_metadata)
     FetchContent_Declare(
         opendaq-cmake-utils
         GIT_REPOSITORY https://github.com/openDAQ/opendaq-cmake-utils.git
-        GIT_TAG        v1.0.3
+        GIT_TAG        jira/TBBAS-3548-staging-metadata-fields
         SOURCE_SUBDIR  _download_only_
     )
     FetchContent_MakeAvailable(opendaq-cmake-utils)
