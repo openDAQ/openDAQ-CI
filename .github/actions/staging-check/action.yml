@@ -1,16 +1,41 @@
 name: Check stagings
-description: Fails when a requested staging is not in the registry.
+description: Resolves the requested stagings to indexes in the registry; fails when one is not there.
+
+# The resolver of the staging chain. A request names a package and what is wanted of it, and is
+# answered with one index of that package -- nothing is downloaded.
+#
+# An index is named, strictest first, by
+#   digest        exactly path@digest
+#   tag           the index under the tag
+#   annotations   the newest index, by its created annotation, that has what is asked for
+#
+# The annotations are globs, matched against a package of the index taken together with the
+# index: a package's own annotations (platform, arch, ...) over those of its index (revision,
+# dependencies.*). An index answers a request when at least one of its packages matches, and
+# that package is still in the registry -- an index outlives what it lists.
+#
+# All requests for one path are answered with ONE index, the newest that answers every one of
+# them, so the platforms of a build never come from different publishes. Requests that want
+# different builds of one package go in different calls.
 
 inputs:
   packages:
     description: |-
-      JSON array of the stagings to check:
+      JSON array of the stagings to resolve:
       [
         {
           "path": "ghcr.io/<org>/path/to/package",   // the package
-          "tag": "latest"                            // the version to look for; both may name
-        }                                            // environment variables ("$CHANNEL")
+          "digest": "sha256:...",                    // optional: exactly this index
+          "tag": "latest",                           // optional: the index under this tag
+          "annotations": {                           // optional: globs a package of the index matches
+            "org.opencontainers.image.revision": "b0b4631*",
+            "com.opendaq.custom.platform": "linux"
+          },
+          "optional": false                          // true -> resolving to nothing is a warning
+        }
       ]
+      path, digest, tag and the annotation values may name environment variables ("$CHANNEL").
+      The array may also hold staging-pull entries, { "artifact": ..., "packages": [ ... ] }.
     required: true
   token:
     description: "Token the registry is read with."
@@ -19,8 +44,16 @@ inputs:
 
 outputs:
   resolved:
-    description: "JSON array of what was found: path, tag and digest."
+    description: >-
+      The request as given, variables expanded, with the digest of the resolved index in every
+      package. It is a request itself: resolving it again answers with the same indexes.
     value: ${{ steps.check.outputs.resolved }}
+  file:
+    description: >-
+      Path of a JSON file with the whole answer, for the steps that follow: the resolved request,
+      and in every package the tags and annotations of its index ("tags", "index") and the
+      packages of the index that matched ("matches": digest and annotations of each).
+    value: ${{ steps.check.outputs.file }}
 
 runs:
   using: composite
@@ -36,19 +69,24 @@ runs:
         TOKEN: ${{ inputs.token }}
         ACTOR: ${{ github.actor }}
       run: |
-        # Resolves each requested tag to a manifest, without downloading it. Reports every
-        # staging that is not there rather than stopping at the first, so one run says all of
-        # what is missing.
-        import json, os, subprocess, sys
+        # Reports every staging that is not there rather than stopping at the first, so one run
+        # says all of what is missing.
+        import fnmatch, hashlib, json, os, subprocess, sys, tempfile
+
+        CREATED = "org.opencontainers.image.created"
+        TITLE   = "org.opencontainers.image.title"
 
         def oras(args, input=None):
             print("+ oras " + " ".join(args), flush=True)
-            r = subprocess.run(["oras"] + args, text=True, capture_output=True, input=input)
+            r = subprocess.run(["oras"] + args, capture_output=True, input=input)
             if r.stderr:
-                print(r.stderr, end="")
+                print(r.stderr.decode(errors="replace"), end="")
             return r
 
-        packages = json.loads(os.environ["PACKAGES"])
+        document = json.loads(os.environ["PACKAGES"])
+
+        # a staging-pull entry holds its packages; anything else is a package
+        requests = [p for item in document for p in item.get("packages", [item])]
 
         # values may name environment variables, so what a request points at can come from an
         # earlier step -- the channel a branch belongs to, the commit a ref file names
@@ -58,37 +96,150 @@ runs:
                 sys.exit(f"::error::{where}: no such variable in {value!r}")
             return expanded
 
-        for p in packages:
-            p["path"] = expand(p["path"], "path").rstrip("/").lower()
-            p["tag"]  = expand(p["tag"], "tag")
+        for p in requests:
+            p["path"] = expand(p["path"], "path").rstrip("/").lower()   # OCI repositories are lowercase
+            for key in ("digest", "tag"):
+                if p.get(key):
+                    p[key] = expand(p[key], key)
+            p["annotations"] = {k: expand(v, k) for k, v in p.get("annotations", {}).items()}
 
         # login is best-effort: public packages resolve anonymously, and a fork pull request has
         # only a read-only token
-        for host in sorted({p["path"].split("/")[0] for p in packages}):
+        for host in sorted({p["path"].split("/")[0] for p in requests}):
             if oras(["login", host, "-u", os.environ["ACTOR"], "--password-stdin"],
-                    input=os.environ["TOKEN"]).returncode != 0:
+                    input=os.environ["TOKEN"].encode()).returncode != 0:
                 print(f"::warning::login failed for {host}; continuing (public packages resolve anonymously)")
 
+        def fetch(ref):
+            """The index at ref and its digest, or None when it is not in the registry."""
+            r = oras(["manifest", "fetch", ref])
+            if r.returncode != 0:
+                return None
+            return "sha256:" + hashlib.sha256(r.stdout).hexdigest(), json.loads(r.stdout)
+
+        there = {}
+        def exists(path, digest):
+            if (path, digest) not in there:
+                there[path, digest] = oras(["manifest", "fetch", "--descriptor",
+                                            f"{path}@{digest}"]).returncode == 0
+            return there[path, digest]
+
+        def matches(path, index, request):
+            """The packages of the index that match the request and are still there."""
+            found = []
+            for child in index.get("manifests", []):
+                seen = {**index.get("annotations", {}), **child.get("annotations", {})}
+                if all(fnmatch.fnmatchcase(seen.get(k, ""), pattern)
+                       for k, pattern in request["annotations"].items()) \
+                        and exists(path, child["digest"]):
+                    found.append({"digest": child["digest"], "annotations": child.get("annotations", {})})
+            return found
+
+        def describe(index):
+            ann = index.get("annotations", {})
+            own = {k: v for k, v in ann.items()
+                   if k.endswith(".revision") or k == CREATED}
+            titles = [c.get("annotations", {}).get(TITLE, c["digest"]) for c in index.get("manifests", [])]
+            return f"{json.dumps(own, sort_keys=True)} packages: {titles}"
+
+        paths = list(dict.fromkeys(p["path"] for p in requests))
+        answers  = {}   # id(request) -> what the file says of it, besides the digest
         resolved, missing = [], []
 
-        for p in packages:
-            path, tag = p["path"], p["tag"]
+        for path in paths:
+            group    = [p for p in requests if p["path"] == path]
+            optional = all(p.get("optional") for p in group)
+            required = group if optional else [p for p in group if not p.get("optional")]
 
-            r = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"])
-            if r.returncode != 0:
-                missing.append(f"{path}:{tag} is not in the registry")
+            def miss(text):
+                if optional:
+                    print(f"::warning::{text}, skipping (optional)")
+                else:
+                    missing.append(text)
+
+            # the indexes to choose from: digest -> (index, tags)
+            named = list(dict.fromkeys(f"@{p['digest']}" if p.get("digest") else f":{p['tag']}"
+                                       for p in group if p.get("digest") or p.get("tag")))
+            candidates, gone = {}, []
+            if named:
+                for ref in named:
+                    found = fetch(path + ref)
+                    if not found:
+                        gone.append(path + ref)
+                        continue
+                    index, tags = candidates.setdefault(found[0], (found[1], []))
+                    if ref.startswith(":"):
+                        tags.append(ref[1:])
+                if gone:
+                    miss(f"{', '.join(gone)} is not in the registry")
+                    continue
+                if len(candidates) > 1:
+                    missing.append(f"{path}: the requests name different indexes: {', '.join(named)}")
+                    continue
+            else:
+                # every index is tagged, and tags/list is OCI's only enumeration
+                r = oras(["repo", "tags", path])
+                for tag in r.stdout.decode().split() if r.returncode == 0 else []:
+                    found = fetch(f"{path}:{tag}")
+                    if found:
+                        candidates.setdefault(found[0], (found[1], []))[1].append(tag)
+                if not candidates:
+                    miss(f"{path} has no indexes in the registry")
+                    continue
+
+            newest = sorted(candidates.items(), reverse=True,
+                            key=lambda c: c[1][0].get("annotations", {}).get(CREATED, ""))
+            chosen = next((c for c in newest if all(matches(path, c[1][0], p) for p in required)), None)
+            if not chosen:
+                wanted = [p["annotations"] for p in required]
+                print(f"{path}: no index answers {json.dumps(wanted)}; looked at")
+                for digest, (index, tags) in newest:
+                    print(f"  {', '.join(tags) or digest}: {describe(index)}")
+                miss(f"{path}: none of its {len(newest)} indexes has what is asked for: "
+                     f"{json.dumps(wanted)}")
                 continue
 
-            digest = json.loads(r.stdout)["digest"]
-            resolved.append({"path": path, "tag": tag, "digest": digest})
-            print(f"resolved {path}:{tag} -> {digest}")
+            digest, (index, tags) = chosen
+            for p in group:
+                p["digest"] = digest
+                found = matches(path, index, p)
+                if not found:
+                    print(f"::warning::{path}@{digest} has nothing for the optional "
+                          f"{json.dumps(p['annotations'])}")
+                answers[id(p)] = {"tags": tags, "index": {"annotations": index.get("annotations", {})},
+                                  "matches": found}
+            resolved.append({"path": path, "digest": digest, "tags": tags, "index": index})
+            print(f"resolved {path} -> {', '.join(tags) or digest}: {describe(index)}")
+
+        # the output crosses jobs and stays small; the file has the whole answer for this one
+        output = json.dumps(document)
+        for p in requests:
+            p.update(answers.get(id(p), {"matches": []}))
+        handle, file = tempfile.mkstemp(prefix="staging-check-", suffix=".json",
+                                        dir=os.environ.get("RUNNER_TEMP"))
+        with os.fdopen(handle, "w") as f:
+            json.dump(document, f, indent=2)
 
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"resolved={json.dumps(resolved)}\n")
+            f.write(f"resolved={output}\n")
+            f.write(f"file={file}\n")
+
+        gs = os.environ.get("GITHUB_STEP_SUMMARY")
+        if gs and resolved:
+            with open(gs, "a") as f:
+                f.write("### Resolved stagings\n\n")
+                for entry in resolved:
+                    ann = entry["index"].get("annotations", {})
+                    f.write(f"- `{entry['path']}@{entry['digest']}`\n")
+                    if entry["tags"]:
+                        f.write(f"  - tags: {', '.join('`' + t + '`' for t in entry['tags'])}\n")
+                    for k, v in sorted(ann.items()):
+                        if k.endswith(".revision") or k == CREATED:
+                            f.write(f"  - `{k}`: `{v}`\n")
 
         if missing:
-            for miss in missing:
-                print(f"::error::{miss}")
+            for text in missing:
+                print(f"::error::{text}")
             sys.exit(1)
 
-        print(f"all {len(packages)} stagings are there")
+        print(f"resolved {len(resolved)} of {len(paths)} stagings, none of the required is missing")
