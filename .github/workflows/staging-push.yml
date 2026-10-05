@@ -166,6 +166,9 @@ jobs:
 
                   ann["org.opencontainers.image.title"]       = fname
                   ann["org.opencontainers.image.description"] = PACKAGE_DESC.format(base=base)
+                  # a package names its build as well, for whoever holds it without the index
+                  ann["org.opencontainers.image.revision"]    = sha
+                  ann["org.opencontainers.image.source"]      = f"{server}/{repo}"
 
                   args = []
                   for k, v in ann.items():
