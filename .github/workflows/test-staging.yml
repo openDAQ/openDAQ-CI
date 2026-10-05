@@ -220,8 +220,9 @@ jobs:
 
           print("ok: everything this run published is still there")
 
-      # An index names the commit it was built from, and the module's the core it was built
-      # against -- which its packages carry in their metadata and staging-push repeats on it.
+      # An index and each of its packages name the commit they were built from, and the module's
+      # the core it was built against -- which its packages carry in their metadata and
+      # staging-push repeats on the index.
       - name: Assert the indexes say what they were built from
         shell: python3 {0}
         env:
@@ -253,6 +254,9 @@ jobs:
               print(f"{ref}: {json.dumps(got, sort_keys=True)}")
               if got != want:
                   wrong.append(f"{name}: expected {json.dumps(want, sort_keys=True)}")
+              for package in index["manifests"]:
+                  if package.get("annotations", {}).get(REVISION) != sha:
+                      wrong.append(f"{name}: a package without the revision, {package['digest']}")
 
           if wrong:
-              sys.exit("::error::index annotations are off -- " + "; ".join(wrong))
+              sys.exit("::error::annotations are off -- " + "; ".join(wrong))
