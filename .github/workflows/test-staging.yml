@@ -9,7 +9,7 @@ name: Test Staging CI
 #            (empty staging-push -> the `stage` facade stops after the build). The module needs
 #            the core only through the registry -- the build-once / consume path.
 #   check    resolves what publish pushed with the staging-check action: by revision, by the
-#            core a module was built against, by its own answer, and what is not there.
+#            core a module was built against, and what is not there.
 #
 # publish writes to the registry, so this workflow only ever runs on pull_request.
 on:
@@ -175,35 +175,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # one index of hello-core answers both platforms; hello-module is found by its core
+      # hello-core by its revision, hello-module by the core it was built against
       - name: Resolve by revision
         id: found
         uses: ./.github/actions/staging-check
         with:
           packages: >-
             [
-              { "artifact": "dep-linux",   "packages": [
-                  { "path": "ghcr.io/$OWNER/test/staging/hello-core",   "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "linux", "com.opendaq.settings.arch": "x86_64" } },
-                  { "path": "ghcr.io/$OWNER/test/staging/hello-module", "annotations": { "com.opendaq.dependencies.hello-core.revision": "$REVISION", "com.opendaq.custom.platform": "linux" } }
+              { "artifact": "dep-core", "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core",   "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "linux", "com.opendaq.settings.arch": "x86_64" } }
               ] },
-              { "artifact": "dep-windows", "packages": [
-                  { "path": "ghcr.io/$OWNER/test/staging/hello-core",   "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "windows" } }
+              { "artifact": "dep-module", "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-module", "annotations": { "com.opendaq.dependencies.hello-core.revision": "$REVISION", "com.opendaq.custom.platform": "windows", "com.opendaq.settings.arch": "x86_64" } }
               ] }
             ]
 
-      - name: Resolve the answer again
-        id: again
-        uses: ./.github/actions/staging-check
-        with:
-          packages: ${{ steps.found.outputs.resolved }}
-
-      - name: Resolve by tag
-        id: tagged
+      - name: Resolve several packages
+        id: windows
         uses: ./.github/actions/staging-check
         with:
           packages: >-
             [
-              { "path": "ghcr.io/$OWNER/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}" }
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "windows" } }
+              ] }
             ]
 
       - name: Resolve what is not there
@@ -213,7 +208,9 @@ jobs:
         with:
           packages: >-
             [
-              { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" } }
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" } }
+              ] }
             ]
 
       - name: Resolve what is not there, optional
@@ -222,56 +219,44 @@ jobs:
         with:
           packages: >-
             [
-              { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" }, "optional": true }
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" }, "optional": true }
+              ] }
             ]
 
       - name: Assert the answers
         shell: python3 {0}
         env:
           FOUND: ${{ steps.found.outputs.resolved }}
-          FOUND_FILE: ${{ steps.found.outputs.file }}
-          AGAIN: ${{ steps.again.outputs.resolved }}
-          TAGGED: ${{ steps.tagged.outputs.resolved }}
+          WINDOWS: ${{ steps.windows.outputs.resolved }}
           ABSENT: ${{ steps.absent.outcome }}
           OPTIONAL: ${{ steps.optional.outputs.resolved }}
-          OPTIONAL_FILE: ${{ steps.optional.outputs.file }}
         run: |
-          import json, os, sys
-
-          REVISION = "org.opencontainers.image.revision"
-          CORE     = "com.opendaq.dependencies.hello-core.revision"
-          PLATFORM = "com.opendaq.custom.platform"
+          import json, os, subprocess, sys
 
           revision = os.environ["REVISION"]
+          found    = json.loads(os.environ["FOUND"])
+          windows  = json.loads(os.environ["WINDOWS"])
+          optional = json.loads(os.environ["OPTIONAL"])
 
-          def packages(document):
-              return [p for item in document for p in item.get("packages", [item])]
+          def annotations(path):
+              """The annotations of the package at path@digest, as the registry has them."""
+              manifest = subprocess.run(["oras", "manifest", "fetch", path], check=True,
+                                        capture_output=True, text=True).stdout
+              return json.loads(manifest).get("annotations", {})
 
-          def named(document, name):
-              return [p for p in packages(document) if p["path"].endswith("/" + name)]
-
-          found  = json.loads(os.environ["FOUND"])
-          whole  = json.load(open(os.environ["FOUND_FILE"]))
-          again  = json.loads(os.environ["AGAIN"])
-          tagged = json.loads(os.environ["TAGGED"])
-          core, module = named(whole, "hello-core"), named(whole, "hello-module")
+          core, module = (entry["packages"] for entry in found)
 
           checks = {
-              "the output keeps the shape of the request": [e["artifact"] for e in found] == ["dep-linux", "dep-windows"],
-              "every package has a digest":                 all(p.get("digest") for p in packages(found)),
-              "both platforms share one core index":        len({p["digest"] for p in core}) == 1,
-              "hello-core is of this revision":             all(p["index"]["annotations"][REVISION] == revision for p in core),
-              "hello-module is built on this core":         module[0]["index"]["annotations"][CORE] == revision,
-              "each request has the packages it asked for": [{m["annotations"][PLATFORM] for m in p["matches"]} for p in core]
-                                                            == [{"linux"}, {"windows"}],
-              "the file agrees with the output":            [p["digest"] for p in packages(whole)]
-                                                            == [p["digest"] for p in packages(found)],
-              "the answer resolves to itself":              [p["digest"] for p in packages(again)]
-                                                            == [p["digest"] for p in packages(found)],
-              "the run tag names the same index":           tagged[0]["digest"] == core[0]["digest"],
-              "a missing staging fails the check":          os.environ["ABSENT"] == "failure",
-              "an optional one does not":                   "digest" not in json.loads(os.environ["OPTIONAL"])[0]
-                                                            and json.load(open(os.environ["OPTIONAL_FILE"]))[0]["matches"] == [],
+              "the output keeps the artifacts of the request": [e["artifact"] for e in found] == ["dep-core", "dep-module"],
+              "one package for one platform and arch":         len(core) == 1 and len(module) == 1,
+              "every path names a digest":                     all("@sha256:" in p["path"] for e in found + windows for p in e["packages"]),
+              "hello-core is of this revision":                annotations(core[0]["path"])["org.opencontainers.image.revision"] == revision,
+              "hello-module is built on this core":            annotations(module[0]["path"])["com.opendaq.dependencies.hello-core.revision"] == revision,
+              "both windows packages, x86 and x86_64":         sorted(annotations(p["path"])["com.opendaq.settings.arch"] for p in windows[0]["packages"])
+                                                               == ["x86", "x86_64"],
+              "a missing staging fails the check":             os.environ["ABSENT"] == "failure",
+              "an optional one does not":                      optional[0]["packages"] == [],
           }
           for what, ok in checks.items():
               print(("ok   " if ok else "FAIL ") + what)
