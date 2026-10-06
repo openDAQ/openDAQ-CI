@@ -1,14 +1,12 @@
 name: Staging Pull
 
-# Resolves requested staging packages in an OCI registry (ghcr) to digests, pulls them as
-# tarballs, and uploads each set as a deps artifact (tarballs + manifest.json) for a build to
-# consume. The mirror of staging-push: push writes children under a path; pull selects a child
-# by its descriptor annotations and fetches it by digest.
+# Pulls staging packages from an OCI registry (ghcr) and uploads each set as a deps artifact
+# (the packages + manifest.json) for a build to consume.
 #
-# Selection is by annotation globs -- org.opencontainers.image.title (the file name, always
-# there) and any com.opendaq.* (there when the staging carried staging-meta.json). A request
-# with no match is "not found" and fails; every match is pulled, but two pulled artifacts may
-# not share a file name -- they would clobber each other in the dir, so that fails loudly.
+# Which packages is the staging-check action's answer: references, path@digest, to the packages
+# whose annotations match the request, from the newest index of each package that has any. This
+# workflow only downloads them. Two packages in one artifact may not share a file name -- they
+# would clobber each other in the dir, so that fails loudly.
 #
 # One matrix job per entry uploads one artifact, so a build consumes its own deps by name.
 on:
@@ -20,12 +18,12 @@ on:
           [
             {
               "artifact": "staging-<job>",                  // the artifact name to upload
-              "packages": [                                  // one or more children to pull into it
+              "packages": [                                  // one or more packages to pull into it
                 {
                   "path": "ghcr.io/<org>/path/to/package",   // the package to resolve
-                  "tag": "latest",                           // which index version
-                  "annotations": {                           // glob filters; every matching child is pulled
-                    "org.opencontainers.image.title": "*-x86_64-linux-gcc-11-release.tar.gz"
+                  "annotations": {                           // globs; every matching package is pulled
+                    "org.opencontainers.image.revision": "<commit>",
+                    "com.opendaq.custom.platform": "linux"
                   },
                   "optional": false                          // true -> resolving to nothing is a warning
                 }
@@ -45,89 +43,53 @@ jobs:
     permissions:
       packages: read
     steps:
-      - name: Setup ORAS
-        uses: oras-project/setup-oras@v1
+      # staging-check of this workflow's own version: a local action is looked for in the
+      # workspace, so the repository this workflow comes from is checked out there.
+      - name: Get staging-check
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .openDAQ-CI
 
-      - name: Resolve and pull
+      - name: Resolve
+        id: resolve
+        uses: ./.openDAQ-CI/.github/actions/staging-check
+        with:
+          packages: ${{ format('[{0}]', toJSON(matrix.entry)) }}
+
+      - name: Pull
         id: pull
         shell: python3 {0}
         env:
-          ENTRY: ${{ toJSON(matrix.entry) }}
-          TOKEN: ${{ github.token }}
-          ACTOR: ${{ github.actor }}
+          RESOLVED: ${{ steps.resolve.outputs.resolved }}
         run: |
-          import json, os, subprocess, sys, fnmatch
-
-          entry    = json.loads(os.environ["ENTRY"])
-          token    = os.environ["TOKEN"]
-          actor    = os.environ["ACTOR"]
-          packages = entry["packages"]
-
-          def run(cmd, err, fatal=True, **kw):
-              print("+ " + " ".join(cmd), flush=True)
-              r = subprocess.run(cmd, text=True, capture_output=True, **kw)
-              if r.stderr: print(r.stderr, end="")
-              if r.returncode != 0:
-                  if fatal:
-                      sys.exit(f"::error::{err}")
-                  print(f"::warning::{err}")
-              return r
-
-          # login is best-effort: public packages pull anonymously and a fork PR has only a
-          # read-only token, so warn and carry on rather than failing the pull
-          hosts = {p["path"].rstrip("/").split("/")[0].lower() for p in packages}
-          for host in sorted(hosts):
-              run(["oras", "login", host, "-u", actor, "--password-stdin"],
-                  f"login failed for {host}; continuing (public packages pull anonymously)",
-                  fatal=False, input=token)
+          import json, os, shutil, subprocess, sys, tempfile
 
           out = os.path.abspath("out")
           os.makedirs(out, exist_ok=True)
-          resolved = []
-          pulled   = {}   # file name -> source, to catch two artifacts clobbering each other
-          for p in packages:
-              path     = p["path"].rstrip("/").lower()
-              tag      = p["tag"]
-              want     = p["annotations"]
-              optional = p.get("optional", False)
 
-              r = run(["oras", "manifest", "fetch", f"{path}:{tag}"],
-                      f"failed to fetch the index for {path}:{tag}", fatal=not optional)
-              if r.returncode != 0:
-                  print(f"::warning::{path}:{tag} is optional and was not found, skipping")
-                  continue
-              children = json.loads(r.stdout).get("manifests", [])
+          pulled = []
+          for package in json.loads(os.environ["RESOLVED"])[0]["packages"]:
+              # each into a dir of its own first, so two packages of one name cannot clobber
+              with tempfile.TemporaryDirectory() as tmp:
+                  run = subprocess.run(["oras", "pull", package["path"], "-o", tmp, "--format", "json"],
+                                       capture_output=True, text=True)
+                  if run.returncode != 0:
+                      sys.exit(f"::error::failed to pull {package['path']}\n{run.stderr}")
+                  for file in json.loads(run.stdout)["files"]:
+                      name = os.path.basename(file["path"])
+                      if os.path.exists(os.path.join(out, name)):
+                          sys.exit(f"::error::two packages share the file name {name!r}")
+                      shutil.move(file["path"], os.path.join(out, name))
+                      pulled.append({"path": package["path"], "title": name, "digest": file["digest"]})
+                      print(f"pulled {package['path']} -> {name}")
 
-              matches = [c for c in children
-                         if all(fnmatch.fnmatch(c.get("annotations", {}).get(k, ""), pat)
-                                for k, pat in want.items())]
-              if not matches:
-                  seen = [c.get("annotations", {}).get("org.opencontainers.image.title", c["digest"])
-                          for c in children]
-                  miss = f"no child of {path}:{tag} matched {want}; available: {seen}"
-                  if optional:
-                      print(f"::warning::{miss}, skipping")
-                      continue
-                  sys.exit(f"::error::{miss}")
+          json.dump(pulled, open(os.path.join(out, "manifest.json"), "w"), indent=2)
 
-              for child in matches:
-                  digest = child["digest"]
-                  title  = child.get("annotations", {}).get("org.opencontainers.image.title", digest)
-                  if title in pulled:
-                      sys.exit(f"::error::two artifacts share the file name {title!r}: "
-                               f"{pulled[title]} and {path}@{digest}")
-                  pulled[title] = f"{path}@{digest}"
-                  run(["oras", "pull", f"{path}@{digest}", "-o", out],
-                      f"failed to pull {path}@{digest}")
-                  resolved.append({"path": path, "tag": tag, "digest": digest,
-                                   "title": title, "annotations": child.get("annotations", {})})
-                  print(f"resolved {path}:{tag} -> {title} ({digest})")
-
-          json.dump(resolved, open(os.path.join(out, "manifest.json"), "w"), indent=2)
-
-          # nothing resolved -> no artifact, so a consumer sees the dependency as absent
+          # nothing pulled -> no artifact, so a consumer sees the dependency as absent
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"pulled={len(resolved)}\n")
+              f.write(f"pulled={len(pulled)}\n")
 
       - name: Upload deps
         if: steps.pull.outputs.pulled != '0'
