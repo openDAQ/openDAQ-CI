@@ -220,9 +220,8 @@ jobs:
 
           print("ok: everything this run published is still there")
 
-      # An index and each of its packages name the commit they were built from, and the module's
-      # the core it was built against -- which its packages carry in their metadata and
-      # staging-push repeats on the index.
+      # An index and each of its packages name the commit they were built from, and the packages
+      # of the module the core they were built against, from their metadata.
       - name: Assert the indexes say what they were built from
         shell: python3 {0}
         env:
@@ -244,19 +243,20 @@ jobs:
               "hello-module": {REVISION: sha, DEPENDENCIES + "hello-core.revision": sha},
           }
 
+          def named(annotations):
+              return {k: v for k, v in annotations.items() if k == REVISION or k.startswith(DEPENDENCIES)}
+
           wrong = []
           for name, want in expected.items():
               ref   = f"ghcr.io/{owner}/test/staging/{name}:{tag}"
               index = json.loads(subprocess.run(["oras", "manifest", "fetch", ref], check=True,
                                                 capture_output=True, text=True).stdout)
-              ann   = index.get("annotations", {})
-              got   = {k: v for k, v in ann.items() if k == REVISION or k.startswith(DEPENDENCIES)}
-              print(f"{ref}: {json.dumps(got, sort_keys=True)}")
-              if got != want:
-                  wrong.append(f"{name}: expected {json.dumps(want, sort_keys=True)}")
+              print(f"{ref}: {json.dumps(named(index.get('annotations', {})), sort_keys=True)}")
+              if index.get("annotations", {}).get(REVISION) != sha:
+                  wrong.append(f"{name}: the index is not of revision {sha}")
               for package in index["manifests"]:
-                  if package.get("annotations", {}).get(REVISION) != sha:
-                      wrong.append(f"{name}: a package without the revision, {package['digest']}")
+                  if named(package.get("annotations", {})) != want:
+                      wrong.append(f"{name}: package {package['digest']} is not {json.dumps(want, sort_keys=True)}")
 
           if wrong:
               sys.exit("::error::annotations are off -- " + "; ".join(wrong))

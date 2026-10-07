@@ -8,7 +8,7 @@ name: Staging Push
 # registry refuses an index with a dangling reference.
 #
 #   ghcr.io/opendaq/nightly/staging/opendaq : run-<run id>-<run attempt>, latest
-#     └─ sha256:index…  revision=<commit>  com.opendaq.dependencies.<name>.revision=<commit>
+#     └─ sha256:index…  revision=<commit>
 #        ├─ sha256:a1…  title=opendaq-x86_64-linux-gcc-11-release.tar.gz
 #        │              com.opendaq: platform=linux    settings.arch=x86_64  settings.compiler=gcc   settings.compiler.version=11
 #        └─ sha256:b2…  title=opendaq-x86_64-windows-msvc-143-release.tar.gz
@@ -18,9 +18,9 @@ name: Staging Push
 # resolve by settings rather than by file name.
 #
 # The run tag is unique to its index and says nothing more: one commit built against two cores
-# is two indexes, and a tag naming the commit could point at one of them only. What an index was
-# built from is in its annotations -- the commit itself, and the commits of its dependencies,
-# which the children carry in their metadata and the index repeats.
+# is two indexes, and a tag naming the commit could point at one of them only. What a package was
+# built from is in its annotations: the commit itself, and the commits of its dependencies from
+# its metadata.
 #
 # NEVER prune "untagged versions" of these packages -- the live children are untagged too.
 # Pruning goes through the index only.
@@ -192,21 +192,11 @@ jobs:
                   desc["annotations"] = digest_ann[desc["digest"]]
               index["artifactType"] = INDEX_TYPE
 
-              # what the index was built against: its children agree on it, or it is no one build
-              DEPENDENCIES = "com.opendaq.dependencies."
-              deps = [{k: v for k, v in ann.items() if k.startswith(DEPENDENCIES)}
-                      for ann in digest_ann.values()]
-              if any(d != deps[0] for d in deps):
-                  for name, d in zip(names, deps):
-                      print(f"{name}: {json.dumps(d, sort_keys=True)}")
-                  sys.exit(f"::error::the packages of {base} differ in their {DEPENDENCIES}* annotations")
-
               index["annotations"] = {
                   "org.opencontainers.image.created":     created,
                   "org.opencontainers.image.description": INDEX_DESC.format(base=base),
                   "org.opencontainers.image.revision":    sha,
                   "org.opencontainers.image.source":      f"{server}/{repo}",
-                  **deps[0],
               }
               json.dump(index, open("index.json", "w"), separators=(",", ":"))
               run(["oras", "manifest", "push", "--oci-layout", f"{layout_dir}:index", "index.json",
