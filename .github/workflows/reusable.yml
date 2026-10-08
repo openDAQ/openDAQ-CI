@@ -492,6 +492,7 @@ jobs:
                   "env": json.dumps(cfg.get("env") or {}),
                   "build-type": build_type,
                   "timeout-minutes": timeout_minutes,
+                  "test-timeout-minutes": max(timeout_minutes - 20, 10),
                   "setup-msvc-toolchain": setup_msvc_toolchain,
                   "cmd-install-ppas":     cmd_install_ppas,
                   "cmd-ensurepip":        cmd_ensurepip,
@@ -966,12 +967,60 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"test-results-dir={test_results_dir}{os.sep}\n")
 
+      # Ends before the job limit, so the results and dumps of a hung run are still uploaded
       - name: Test
         id: test
         if: matrix.enable-tests
+        timeout-minutes: ${{ matrix.test-timeout-minutes }}
+        shell: bash
         env:
           GTEST_OUTPUT: xml:${{ steps.setup-gtest.outputs.test-results-dir }}
-        run: ${{ matrix.cmd-ctest-priv }} ctest --preset ${{ matrix.name }}
+          OPENDAQ_TEST_DUMP_DIR: ${{ steps.setup-gtest.outputs.test-results-dir }}dumps
+          HANG_SECONDS: 840
+        run: |
+          mkdir -p "$OPENDAQ_TEST_DUMP_DIR"
+
+          # Logs free memory and disk every minute, and dumps each test process older than HANG_SECONDS once
+          watch_tests() {
+            set +e
+            local dumped=" " pids=""
+            while sleep 60; do
+              case "$RUNNER_OS" in
+                Linux)
+                  echo "[ci-watch] $(date -u +%T) memory available $(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo) MiB, disk free $(df -Pm . | awk 'NR == 2 {print $4}') MiB" ;;
+                macOS)
+                  echo "[ci-watch] $(date -u +%T) memory available $(( $(vm_stat | awk '/Pages (free|inactive|speculative)/ {s += $NF} END {print s}') * $(pagesize) / 1048576 )) MiB, disk free $(df -Pm . | awk 'NR == 2 {print $4}') MiB"
+                  pids=$(ps -axo pid=,etime=,comm= | awk -v limit="$HANG_SECONDS" '{
+                    n = split($2, t, /[-:]/); s = t[n] + 60 * t[n - 1] + (n > 2 ? 3600 * t[n - 2] : 0) + (n > 3 ? 86400 * t[n - 3] : 0)
+                    c = $3; sub(/.*\//, "", c); if (c ~ /^test_/ && s >= limit) print $1 }') ;;
+                Windows)
+                  powershell -NoProfile -Command '$os = Get-CimInstance Win32_OperatingSystem; "[ci-watch] {0:HH:mm:ss} memory free {1} MiB, disk free {2} MiB" -f (Get-Date).ToUniversalTime(), [int]($os.FreePhysicalMemory / 1KB), [int]((Get-PSDrive C).Free / 1MB)'
+                  pids=$(powershell -NoProfile -Command 'Get-Process -Name test_* -ErrorAction SilentlyContinue | Where-Object { ((Get-Date) - $_.StartTime).TotalSeconds -ge $env:HANG_SECONDS } | ForEach-Object { $_.Id }' | tr -d '\r') ;;
+              esac
+              for pid in $pids; do
+                case "$dumped" in *" $pid "*) continue ;; esac
+                dumped="$dumped$pid "
+                echo "[ci-watch] test process $pid has run for more than $HANG_SECONDS s, dumping its stacks"
+                case "$RUNNER_OS" in
+                  macOS) sudo lldb -p "$pid" --batch -o "thread backtrace all" -o "process detach" | tee "$OPENDAQ_TEST_DUMP_DIR/hang.$pid.txt" ;;
+                  Windows) procdump -accepteula -mm "$pid" "$OPENDAQ_TEST_DUMP_DIR" ;;
+                esac
+              done
+              pids=""
+            done
+          }
+
+          watch_tests &
+          watcher=$!
+          status=0
+          ${{ matrix.cmd-ctest-priv }} ctest --preset ${{ matrix.name }} || status=$?
+          kill "$watcher"
+
+          # macOS writes a crash report with the stacks of all threads for every crashed process
+          if [ "$RUNNER_OS" = macOS ]; then
+            cp /Library/Logs/DiagnosticReports/test_*.ips ~/Library/Logs/DiagnosticReports/test_*.ips "$OPENDAQ_TEST_DUMP_DIR" 2>/dev/null || true
+          fi
+          exit $status
 
       - name: Upload test results
         if: ${{ !cancelled() && contains('success failure', steps.test.outcome) && matrix.gtest-artifact != '' }}
