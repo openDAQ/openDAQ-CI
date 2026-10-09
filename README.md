@@ -231,6 +231,10 @@ The pattern components and their values are listed in the platform naming table:
 | windows-2022 | x86_64 | ninja | clang | release |
 | windows-2022 | x86_64 | ninja | intel-cc | release |
 | windows-11 | armv8 | msvs | v143 | release |
+| windows-2025 | x86_64 | msvs | v142 | release |
+| windows-2025 | x86_64 | msvs | v145 | debug |
+| windows-2025 | x86 | msvs | v145 | release |
+| windows-2025 | x86_64 | ninja | clang-20 | release |
 | ubuntu-20.04 | x86 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
 | ubuntu-20.04 | armv8 | ninja | clang-9 | release |
@@ -241,6 +245,8 @@ The pattern components and their values are listed in the platform naming table:
 | ubuntu-24.04 | x86_64 | ninja | gcc-14 | release |
 | ubuntu-24.04 | x86_64 | ninja | clang-18 | release |
 | ubuntu-24.04 | x86_64 | ninja | intel-cc | release |
+| ubuntu-26.04 | armv8 | ninja | gcc-15 | debug |
+| ubuntu-26.04 | x86_64 | ninja | clang-22 | release |
 | manylinux_2_28 | x86_64 | ninja | gcc-14 | release |
 | manylinux_2_28 | armv8 | ninja | gcc-14 | release |
 | macos-26 | x86_64 | ninja | appleclang-17 | debug |
@@ -249,6 +255,7 @@ The pattern components and their values are listed in the platform naming table:
 | macos-26 | x86_64 | ninja | appleclang-21 | release |
 | macos-26 | armv8 | ninja | appleclang-21 | debug |
 | macos-26 | armv8 | ninja | appleclang-21 | release |
+| macos-27 | armv8 | ninja | appleclang-21 | release |
 
 Example: `ubuntu-24.04-x86_64-ninja-gcc-14-release`
 
