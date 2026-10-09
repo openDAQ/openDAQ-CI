@@ -51,7 +51,7 @@ jobs:
             "match-jobs": ["*"],
             "stagings": [
               { "name": "core",   "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module", "CPACK_OPENDAQ_META_FIELDS": "dependencies/hello-core/revision=${{ github.sha }}" } }
+              { "name": "module", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module", "CPACK_OPENDAQ_META_FIELDS": "dependencies/hello-core/revision=${{ github.sha }};dependencies/test/revision=test-revision" } }
             ]
           },
           { "match-jobs": ["ubuntu-*", "manylinux*"], "installers": [
@@ -241,7 +241,7 @@ jobs:
 
           expected = {
               "hello-core":   {REVISION: sha},
-              "hello-module": {REVISION: sha, DEPENDENCIES + "hello-core.revision": sha},
+              "hello-module": {REVISION: sha, DEPENDENCIES + "hello-core.revision": sha, DEPENDENCIES + "test.revision": "test-revision"},
           }
 
           def named(annotations):
