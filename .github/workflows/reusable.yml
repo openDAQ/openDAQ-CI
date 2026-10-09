@@ -164,10 +164,18 @@ jobs:
               "allow-python-ppa": True,
           }
 
+          # 26.04 packages the Mono assemblies as mono-libraries
+          _ubuntu_26_04_x86_64_ninja = {
+              **_ubuntu_24_04_x86_64_ninja,
+              "image": "ubuntu:26.04",
+              "apt-install-default": ["mono-runtime", "mono-libraries", "jq"],
+          }
+
           # arm64 image variant is pulled automatically on the ARM runner; arch is detected.
           _ubuntu_20_04_armv8_ninja = { **_ubuntu_20_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
           _ubuntu_22_04_armv8_ninja = { **_ubuntu_22_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
           _ubuntu_24_04_armv8_ninja = { **_ubuntu_24_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
+          _ubuntu_26_04_armv8_ninja = { **_ubuntu_26_04_x86_64_ninja, "runner": "ubuntu-24.04-arm" }
 
           # --- manylinux configs (yum; gcc-toolset compilers, as wheels are built) ---
 
@@ -203,11 +211,14 @@ jobs:
 
           _macos_26_armv8_ninja   = {**_macos_ninja, "runner": "macos-26"}
           _macos_26_x86_64_ninja  = {**_macos_ninja, "runner": "macos-26-intel"}
+          # macOS 27 with Xcode 27 is a public preview under the image label xcode-27
+          _macos_27_armv8_ninja   = {**_macos_ninja, "runner": "xcode-27"}
 
           # /usr/bin/clang follows DEVELOPER_DIR, so the Xcode picks the Apple clang version
           _apple_clang = { "cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++" }
           _apple_clang_17 = {**_apple_clang, "env": {"DEVELOPER_DIR": "/Applications/Xcode_26.3.app/Contents/Developer"}}
           _apple_clang_21 = {**_apple_clang, "env": {"DEVELOPER_DIR": "/Applications/Xcode_26.6.app/Contents/Developer"}}
+          _apple_clang_21_xcode_27 = {**_apple_clang, "env": {"DEVELOPER_DIR": "/Applications/Xcode_27.0.app/Contents/Developer"}}
 
           # --- Windows configs ---
 
@@ -221,6 +232,13 @@ jobs:
 
           _windows_2022_x86_64_msvs  = {**_windows_2022_x86_64, "generator": "Visual Studio 17 2022"}
           _windows_2022_x86_64_ninja = {**_windows_2022_x86_64, "generator": "Ninja"}
+
+          # Visual Studio 2026 carries the v145 toolset and, as an installed component, v142
+          _windows_2025_x86_64_msvs  = {**_windows_2022_x86_64, "runner": "windows-2025", "generator": "Visual Studio 18 2026"}
+          _windows_2025_x86_64_ninja = {**_windows_2022_x86_64, "runner": "windows-2025", "generator": "Ninja"}
+
+          # the runner image's standalone LLVM, not the clang bundled with Visual Studio
+          _windows_llvm = "C:/Program Files/LLVM/bin/"
 
           # the generator drives the arm64 cross toolchain, so no msvc-dev-cmd environment
           _windows_11_armv8_msvs = {
@@ -265,6 +283,11 @@ jobs:
 
               "windows-11-armv8-msvs-v143-release":         {**_windows_11_armv8_msvs,      "toolset": "v143",                            "build-type": "Release" },
 
+              "windows-2025-x86_64-msvs-v142-release":      {**_windows_2025_x86_64_msvs,   "toolset": "v142",                            "build-type": "Release" },
+              "windows-2025-x86_64-msvs-v145-debug":        {**_windows_2025_x86_64_msvs,   "toolset": "v145",                            "build-type": "Debug" },
+              "windows-2025-x86-msvs-v145-release":         {**_windows_2025_x86_64_msvs,   "toolset": "v145",                            "build-type": "Release",  "target-arch": "x86" },
+              "windows-2025-x86_64-ninja-clang-20-release": {**_windows_2025_x86_64_ninja,  "cc": _windows_llvm + "clang.exe", "cxx": _windows_llvm + "clang++.exe", "build-type": "Release" },
+
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_ninja,     "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"] },
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
               "ubuntu-20.04-armv8-ninja-clang-9-release":   {**_ubuntu_20_04_armv8_ninja,   "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
@@ -278,6 +301,9 @@ jobs:
               "ubuntu-24.04-x86_64-ninja-clang-18-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "clang-18",   "cxx": "clang++-18",      "build-type": "Release",  "apt-install": ["clang-18"] },
               "ubuntu-24.04-x86_64-ninja-intel-cc-release": {**_ubuntu_24_04_x86_64_ninja,  "cc": "icx",        "cxx": "icpx",            "build-type": "Release",  "setup-intel-cc": "linux-intel-cc"},
 
+              "ubuntu-26.04-armv8-ninja-gcc-15-debug":      {**_ubuntu_26_04_armv8_ninja,   "cc": "gcc-15",     "cxx": "g++-15",          "build-type": "Debug",    "apt-install": ["gcc-15", "g++-15"] },
+              "ubuntu-26.04-x86_64-ninja-clang-22-release": {**_ubuntu_26_04_x86_64_ninja,  "cc": "clang-22",   "cxx": "clang++-22",      "build-type": "Release",  "apt-install": ["clang-22"] },
+
               "manylinux_2_28-x86_64-ninja-gcc-14-release": {**_manylinux_2_28_x86_64_ninja, "cc": _gcc_toolset_14 + "gcc", "cxx": _gcc_toolset_14 + "g++", "build-type": "Release",  "yum-install": ["gcc-toolset-14-gcc", "gcc-toolset-14-gcc-c++"] },
               "manylinux_2_28-armv8-ninja-gcc-14-release":  {**_manylinux_2_28_armv8_ninja,  "cc": _gcc_toolset_14 + "gcc", "cxx": _gcc_toolset_14 + "g++", "build-type": "Release",  "yum-install": ["gcc-toolset-14-gcc", "gcc-toolset-14-gcc-c++"] },
 
@@ -287,6 +313,8 @@ jobs:
               "macos-26-x86_64-ninja-appleclang-21-release": {**_macos_26_x86_64_ninja,     **_apple_clang_21,                            "build-type": "Release"},
               "macos-26-armv8-ninja-appleclang-21-debug":    {**_macos_26_armv8_ninja,      **_apple_clang_21,                            "build-type": "Debug"},
               "macos-26-armv8-ninja-appleclang-21-release":  {**_macos_26_armv8_ninja,      **_apple_clang_21,                            "build-type": "Release"},
+
+              "macos-27-armv8-ninja-appleclang-21-release":  {**_macos_27_armv8_ninja,      **_apple_clang_21_xcode_27,                   "build-type": "Release"},
           }
 
           # --- Generate jobs matrix ---
@@ -368,7 +396,7 @@ jobs:
               python_arch = "x86" if cfg.get("target-arch", "") == "x86" else ""
               py_ver = python_version or "3"
               py_arch = "-32" if python_arch == "x86" else ""
-              vcpkg_os = {"windows": "windows", "ubuntu": "linux", "macos": "osx"}[runner.split("-")[0]]
+              vcpkg_os = {"windows": "windows", "ubuntu": "linux", "macos": "osx", "xcode": "osx"}[runner.split("-")[0]]
               vcpkg_arch = {"": "x64", "x86": "x86", "armv8": "arm64"}[cfg.get("target-arch") or ""]
               vcpkg_triplet = f"{vcpkg_arch}-{vcpkg_os}"
 
