@@ -71,7 +71,7 @@ jobs:
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
         run: |
-          import glob, json, os, subprocess, sys
+          import json, os, glob, subprocess, sys
           from datetime import datetime, timezone
 
           PACKAGE_TYPE = "application/vnd.opendaq.package.v1"
