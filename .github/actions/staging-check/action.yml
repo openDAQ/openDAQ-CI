@@ -1,16 +1,32 @@
 name: Check stagings
-description: Fails when a requested staging is not in the registry.
+description: Resolves staging requests to references of the packages in the registry; fails when one is not there.
+
+# For each requested package: the packages whose annotations match "annotations", taken from the
+# newest index of the package that has any. The answer is the request with every package
+# replaced by references to what was
+# found, path@digest. A request nothing answers is an error, or a warning when it is optional.
+# The packages are taken from the index as it lists them; nothing is downloaded but the indexes.
 
 inputs:
   packages:
     description: |-
-      JSON array of the stagings to check:
+      JSON array of the artifacts to resolve, as staging-pull takes them:
       [
         {
-          "path": "ghcr.io/<org>/path/to/package",   // the package
-          "tag": "latest"                            // the version to look for; both may name
-        }                                            // environment variables ("$CHANNEL")
+          "artifact": "core-linux-x86_64",                     // optional here
+          "packages": [
+            {
+              "path": "ghcr.io/<org>/path/to/package",
+              "annotations": {                                 // optional: globs a package matches
+                "org.opencontainers.image.revision": "adfef64*",
+                "com.opendaq.custom.platform": "linux"
+              },
+              "optional": false                                // true -> nothing found is a warning
+            }
+          ]
+        }
       ]
+      Strings may name environment variables ("$CHANNEL").
     required: true
   token:
     description: "Token the registry is read with."
@@ -19,8 +35,19 @@ inputs:
 
 outputs:
   resolved:
-    description: "JSON array of what was found: path, tag and digest."
-    value: ${{ steps.check.outputs.resolved }}
+    description: |-
+      JSON array of the artifacts resolved, the request with every package replaced by what was found:
+      [
+        {
+          "artifact": "core-linux-x86_64",                     // as in the request
+          "packages": [                                        // one per package found
+            {
+              "path": "ghcr.io/<org>/path/to/package@sha256:<digest>"
+            }
+          ]
+        }
+      ]
+    value: ${{ steps.resolve.outputs.resolved }}
 
 runs:
   using: composite
@@ -28,67 +55,62 @@ runs:
     - name: Setup ORAS
       uses: oras-project/setup-oras@v1
 
-    - name: Check
-      id: check
+    - name: Resolve
+      id: resolve
       shell: python3 {0}
       env:
         PACKAGES: ${{ inputs.packages }}
         TOKEN: ${{ inputs.token }}
         ACTOR: ${{ github.actor }}
       run: |
-        # Resolves each requested tag to a manifest, without downloading it. Reports every
-        # staging that is not there rather than stopping at the first, so one run says all of
-        # what is missing.
-        import json, os, subprocess, sys
+        import fnmatch, json, os, re, subprocess, sys
 
-        def oras(args, input=None):
-            print("+ oras " + " ".join(args), flush=True)
-            r = subprocess.run(["oras"] + args, text=True, capture_output=True, input=input)
-            if r.stderr:
-                print(r.stderr, end="")
-            return r
+        def oras(*args, input=None):
+            """Runs oras: its output, or None when it fails."""
+            run = subprocess.run(["oras", *args], capture_output=True, input=input)
+            if run.returncode != 0:
+                print(run.stderr.decode(errors="replace"), end="")
+                return None
+            return run.stdout
 
-        packages = json.loads(os.environ["PACKAGES"])
+        def matches(annotations, globs):
+            return all(fnmatch.fnmatchcase(annotations.get(key, ""), glob) for key, glob in globs.items())
 
-        # values may name environment variables, so what a request points at can come from an
-        # earlier step -- the channel a branch belongs to, the commit a ref file names
-        def expand(value, where):
-            expanded = os.path.expandvars(value)
-            if "$" in expanded:
-                sys.exit(f"::error::{where}: no such variable in {value!r}")
-            return expanded
+        request = os.path.expandvars(os.environ["PACKAGES"])
+        if unset := re.search(r"\$\w+", request):
+            sys.exit(f"::error::{unset.group()} is not set")
+        artifacts = json.loads(request)
 
-        for p in packages:
-            p["path"] = expand(p["path"], "path").rstrip("/").lower()
-            p["tag"]  = expand(p["tag"], "tag")
+        # login is best-effort: public packages resolve anonymously
+        for host in {p["path"].split("/")[0].lower() for a in artifacts for p in a["packages"]}:
+            if oras("login", host, "-u", os.environ["ACTOR"], "--password-stdin",
+                    input=os.environ["TOKEN"].encode()) is None:
+                print(f"::warning::login failed for {host}; continuing anonymously")
 
-        # login is best-effort: public packages resolve anonymously, and a fork pull request has
-        # only a read-only token
-        for host in sorted({p["path"].split("/")[0] for p in packages}):
-            if oras(["login", host, "-u", os.environ["ACTOR"], "--password-stdin"],
-                    input=os.environ["TOKEN"]).returncode != 0:
-                print(f"::warning::login failed for {host}; continuing (public packages resolve anonymously)")
+        failed = False
+        for artifact in artifacts:
+            found = []
+            for package in artifact["packages"]:
+                path = package["path"].rstrip("/").lower()   # OCI repositories are lowercase
 
-        resolved, missing = [], []
+                # every index of the package, and in each the packages whose annotations match
+                tags = (oras("repo", "tags", path) or b"").decode().split()
+                indexes = [json.loads(raw) for raw in (oras("manifest", "fetch", f"{path}:{tag}") for tag in tags) if raw]
+                candidates = [(index["annotations"].get("org.opencontainers.image.created", ""),
+                               [{"path": f"{path}@{child['digest']}"} for child in index.get("manifests", [])
+                                if matches(child.get("annotations", {}), package.get("annotations", {}))])
+                              for index in indexes]
 
-        for p in packages:
-            path, tag = p["path"], p["tag"]
-
-            r = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"])
-            if r.returncode != 0:
-                missing.append(f"{path}:{tag} is not in the registry")
-                continue
-
-            digest = json.loads(r.stdout)["digest"]
-            resolved.append({"path": path, "tag": tag, "digest": digest})
-            print(f"resolved {path}:{tag} -> {digest}")
+                # those of the newest index that has any
+                references = max([c for c in candidates if c[1]], default=("", []))[1]
+                if not references:
+                    level = "warning" if package.get("optional") else "error"
+                    failed |= level == "error"
+                    print(f"::{level}::nothing answers {json.dumps(package)}")
+                found += references
+            artifact["packages"] = found
 
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"resolved={json.dumps(resolved)}\n")
-
-        if missing:
-            for miss in missing:
-                print(f"::error::{miss}")
-            sys.exit(1)
-
-        print(f"all {len(packages)} stagings are there")
+            f.write(f"resolved={json.dumps(artifacts)}\n")
+        print(json.dumps(artifacts, indent=2))
+        sys.exit(1 if failed else 0)

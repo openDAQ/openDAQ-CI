@@ -1,6 +1,6 @@
 name: Test Staging CI
 
-# Exercises the whole staging chain on every PR through the `stage` facade, in two jobs:
+# Exercises the whole staging chain on every PR through the `stage` facade:
 #
 #   publish  one umbrella build of hello emits BOTH component stagings (core, module) and their
 #            installers from a single build, and publishes each to its own ghcr index. Producing
@@ -8,6 +8,8 @@ name: Test Staging CI
 #   consume  pulls hello-core back from ghcr and builds hello-module against it, with no push
 #            (empty staging-push -> the `stage` facade stops after the build). The module needs
 #            the core only through the registry -- the build-once / consume path.
+#   check    resolves what publish pushed with the staging-check action: by revision, by the
+#            core a module was built against, and what is not there.
 #
 # publish writes to the registry, so this workflow only ever runs on pull_request.
 on:
@@ -159,11 +161,113 @@ jobs:
           { "match-jobs": ["*"], "artifacts": [{ "name": "dep-optional-*", "dir": "staging-deps" }] }
         ]
 
+  # The stagings of this run, found the way a consumer looks for them: by what they were built
+  # from, not by the run tag.
+  check:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      OWNER: ${{ github.repository_owner }}
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # hello-core by its revision, hello-module by the core it was built against
+      - name: Resolve by revision
+        id: found
+        uses: ./.github/actions/staging-check
+        with:
+          packages: >-
+            [
+              { "artifact": "dep-core", "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core",   "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "linux", "com.opendaq.settings.arch": "x86_64" } }
+              ] },
+              { "artifact": "dep-module", "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-module", "annotations": { "com.opendaq.dependencies.hello-core.revision": "$REVISION", "com.opendaq.custom.platform": "windows", "com.opendaq.settings.arch": "x86_64" } }
+              ] }
+            ]
+
+      - name: Resolve several packages
+        id: windows
+        uses: ./.github/actions/staging-check
+        with:
+          packages: >-
+            [
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "$REVISION", "com.opendaq.custom.platform": "windows" } }
+              ] }
+            ]
+
+      - name: Resolve what is not there
+        id: absent
+        continue-on-error: true
+        uses: ./.github/actions/staging-check
+        with:
+          packages: >-
+            [
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" } }
+              ] }
+            ]
+
+      - name: Resolve what is not there, optional
+        id: optional
+        uses: ./.github/actions/staging-check
+        with:
+          packages: >-
+            [
+              { "packages": [
+                  { "path": "ghcr.io/$OWNER/test/staging/hello-core", "annotations": { "org.opencontainers.image.revision": "no-such-revision" }, "optional": true }
+              ] }
+            ]
+
+      - name: Assert the answers
+        shell: python3 {0}
+        env:
+          FOUND: ${{ steps.found.outputs.resolved }}
+          WINDOWS: ${{ steps.windows.outputs.resolved }}
+          ABSENT: ${{ steps.absent.outcome }}
+          OPTIONAL: ${{ steps.optional.outputs.resolved }}
+        run: |
+          import json, os, subprocess, sys
+
+          revision = os.environ["REVISION"]
+          found    = json.loads(os.environ["FOUND"])
+          windows  = json.loads(os.environ["WINDOWS"])
+          optional = json.loads(os.environ["OPTIONAL"])
+
+          def annotations(path):
+              """The annotations of the package at path@digest, as the registry has them."""
+              manifest = subprocess.run(["oras", "manifest", "fetch", path], check=True,
+                                        capture_output=True, text=True).stdout
+              return json.loads(manifest).get("annotations", {})
+
+          core, module = (entry["packages"] for entry in found)
+
+          checks = {
+              "the output keeps the artifacts of the request": [e["artifact"] for e in found] == ["dep-core", "dep-module"],
+              "one package for one platform and arch":         len(core) == 1 and len(module) == 1,
+              "every path names a digest":                     all("@sha256:" in p["path"] for e in found + windows for p in e["packages"]),
+              "hello-core is of this revision":                annotations(core[0]["path"])["org.opencontainers.image.revision"] == revision,
+              "hello-module is built on this core":            annotations(module[0]["path"])["com.opendaq.dependencies.hello-core.revision"] == revision,
+              "both windows packages, x86 and x86_64":         sorted(annotations(p["path"])["com.opendaq.settings.arch"] for p in windows[0]["packages"])
+                                                               == ["x86", "x86_64"],
+              "a missing staging fails the check":             os.environ["ABSENT"] == "failure",
+              "an optional one does not":                      optional[0]["packages"] == [],
+          }
+          for what, ok in checks.items():
+              print(("ok   " if ok else "FAIL ") + what)
+          if not all(checks.values()):
+              sys.exit("::error::staging-check answered wrong")
+
   # The test packages are republished on every run, so everything but this run's own is spent.
   # An hour of retention keeps what a concurrent run may still be pulling, and exercises the
   # cleanup on the way.
   cleanup:
-    needs: [publish, consume, consume-optional]
+    needs: [publish, consume, consume-optional, check]
     if: always()
     permissions:
       packages: write
