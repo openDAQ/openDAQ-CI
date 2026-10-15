@@ -51,7 +51,7 @@ jobs:
             "match-jobs": ["*"],
             "stagings": [
               { "name": "core",   "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-core", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "core" } },
-              { "name": "module", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module" } }
+              { "name": "module", "variables": { "CPACK_OPENDAQ_META_PACKAGE_NAME": "hello-module", "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON", "CPACK_COMPONENTS_ALL": "module", "CPACK_OPENDAQ_META_FIELDS": "dependencies/hello-core/revision=${{ github.sha }};dependencies/test/revision=test-revision" } }
             ]
           },
           { "match-jobs": ["ubuntu-*", "manylinux*"], "installers": [
@@ -87,13 +87,13 @@ jobs:
     with:
       staging-pull: >-
         [
-          { "artifact": "dep-core-ubuntu-22.04-x86_64-ninja-gcc-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "linux",           "com.opendaq.settings.arch": "x86_64" } }] },
-          { "artifact": "dep-core-ubuntu-22.04-armv8-ninja-gcc-release",      "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "linux",           "com.opendaq.settings.arch": "armv8"  } }] },
-          { "artifact": "dep-core-manylinux_2_28-x86_64-ninja-gcc-14-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "manylinux_2_28", "com.opendaq.settings.arch": "x86_64" } }] },
-          { "artifact": "dep-core-windows-2022-x86_64-msvs-v143-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "windows",         "com.opendaq.settings.arch": "x86_64" } }] },
-          { "artifact": "dep-core-windows-2022-x86-msvs-v143-release",        "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "windows",         "com.opendaq.settings.arch": "x86"    } }] },
-          { "artifact": "dep-core-macos-26-x86_64-ninja-appleclang-21-release",  "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "macos",           "com.opendaq.settings.arch": "x86_64" } }] },
-          { "artifact": "dep-core-macos-26-armv8-ninja-appleclang-21-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "${{ github.sha }}", "annotations": { "com.opendaq.custom.platform": "macos",           "com.opendaq.settings.arch": "armv8"  } }] }
+          { "artifact": "dep-core-ubuntu-22.04-x86_64-ninja-gcc-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "linux",           "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-ubuntu-22.04-armv8-ninja-gcc-release",      "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "linux",           "com.opendaq.settings.arch": "armv8"  } }] },
+          { "artifact": "dep-core-manylinux_2_28-x86_64-ninja-gcc-14-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "manylinux_2_28", "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-windows-2022-x86_64-msvs-v143-release",     "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "windows",         "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-windows-2022-x86-msvs-v143-release",        "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "windows",         "com.opendaq.settings.arch": "x86"    } }] },
+          { "artifact": "dep-core-macos-26-x86_64-ninja-appleclang-21-release",  "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "macos",           "com.opendaq.settings.arch": "x86_64" } }] },
+          { "artifact": "dep-core-macos-26-armv8-ninja-appleclang-21-release",   "packages": [{ "path": "ghcr.io/${{ github.repository_owner }}/test/staging/hello-core", "tag": "run-${{ github.run_id }}-${{ github.run_attempt }}", "annotations": { "com.opendaq.custom.platform": "macos",           "com.opendaq.settings.arch": "armv8"  } }] }
         ]
       include-jobs: >-
         [
@@ -192,14 +192,14 @@ jobs:
         shell: python3 {0}
         env:
           OWNER: ${{ github.repository_owner }}
-          SHA: ${{ github.sha }}
+          RUN_TAG: run-${{ github.run_id }}-${{ github.run_attempt }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
         run: |
           import os, subprocess, sys
 
           owner = os.environ["OWNER"].lower()
-          sha   = os.environ["SHA"]
+          tag   = os.environ["RUN_TAG"]
 
           subprocess.run(["oras", "login", "ghcr.io", "-u", os.environ["ACTOR"], "--password-stdin"],
                          input=os.environ["TOKEN"], text=True, check=True)
@@ -207,7 +207,7 @@ jobs:
           gone = []
           for kind in ("staging", "installer"):
               for name in ("hello-core", "hello-module"):
-                  ref = f"ghcr.io/{owner}/test/{kind}/{name}:{sha}"
+                  ref = f"ghcr.io/{owner}/test/{kind}/{name}:{tag}"
                   if subprocess.run(["oras", "manifest", "fetch", "--descriptor", ref],
                                     capture_output=True).returncode != 0:
                       gone.append(ref)
@@ -219,3 +219,45 @@ jobs:
                        + ", ".join(gone))
 
           print("ok: everything this run published is still there")
+
+      # An index and each of its packages name the commit they were built from, and those of the
+      # module the core they were built against -- the packages from their metadata, the index
+      # repeating it.
+      - name: Assert the indexes say what they were built from
+        shell: python3 {0}
+        env:
+          OWNER: ${{ github.repository_owner }}
+          RUN_TAG: run-${{ github.run_id }}-${{ github.run_attempt }}
+          SHA: ${{ github.sha }}
+        run: |
+          import json, os, subprocess, sys
+
+          owner = os.environ["OWNER"].lower()
+          tag   = os.environ["RUN_TAG"]
+          sha   = os.environ["SHA"]
+
+          REVISION     = "org.opencontainers.image.revision"
+          DEPENDENCIES = "com.opendaq.dependencies."
+
+          expected = {
+              "hello-core":   {REVISION: sha},
+              "hello-module": {REVISION: sha, DEPENDENCIES + "hello-core.revision": sha, DEPENDENCIES + "test.revision": "test-revision"},
+          }
+
+          def named(annotations):
+              return {k: v for k, v in annotations.items() if k == REVISION or k.startswith(DEPENDENCIES)}
+
+          wrong = []
+          for name, want in expected.items():
+              ref   = f"ghcr.io/{owner}/test/staging/{name}:{tag}"
+              index = json.loads(subprocess.run(["oras", "manifest", "fetch", ref], check=True,
+                                                capture_output=True, text=True).stdout)
+              print(f"{ref}: {json.dumps(named(index.get('annotations', {})), sort_keys=True)}")
+              if named(index.get("annotations", {})) != want:
+                  wrong.append(f"{name}: the index is not {json.dumps(want, sort_keys=True)}")
+              for package in index["manifests"]:
+                  if named(package.get("annotations", {})) != want:
+                      wrong.append(f"{name}: package {package['digest']} is not {json.dumps(want, sort_keys=True)}")
+
+          if wrong:
+              sys.exit("::error::annotations are off -- " + "; ".join(wrong))

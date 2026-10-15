@@ -103,7 +103,7 @@ jobs:
                   continue
               cutoff = now - window
 
-              # every index is tagged (sha + short) and tags/list is OCI's only enumeration; two
+              # every index is tagged (by its run) and tags/list is OCI's only enumeration; two
               # tags share one index digest, so resolve each tag and collapse to unique digests
               digests = {}
               for tag in oras(["repo", "tags", path], f"listing tags for {path} failed").split():
