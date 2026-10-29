@@ -150,7 +150,8 @@ jobs:
               "bootstrap": "dpkg --add-architecture i386 && apt-get update && apt-get install -y git python3-pip curl gnupg ca-certificates",
               # Cross-compiling 32-bit on a containerized runner: 
               # Default 8MB pthread stacks exhaust virtual address space (pthread_create EAGAIN) -- limit per-thread stack to 4MB.
-              "container-options": "--ulimit stack=4194304:4194304",
+              # Docker's default seccomp profile on ubuntu-26.04 hosts rejects 32-bit socket() with ENOSYS -- run unconfined.
+              "container-options": "--ulimit stack=4194304:4194304 --security-opt seccomp=unconfined",
           }
 
           _ubuntu_20_04_x86_64_ninja = { **_ubuntu_guest_x86_64_ninja, "image": "ubuntu:20.04" }
