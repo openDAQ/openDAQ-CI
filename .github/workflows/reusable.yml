@@ -16,7 +16,7 @@ on:
         type: string
         default: '[]'
       packages:
-        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]. May also pull dependency stagings: "artifacts": [{"name": "core-staging-*", "dir": "staging-deps"}] (* -> job name; extracted into dir before configure).'
+        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]. May also pull dependency stagings: "artifacts": [{"name": "core-staging-*", "dir": "staging-deps"}] (name: a download-artifact glob; the tarballs of the artifacts it matches are extracted into its own dir before configure).'
         type: string
         default: '[]'
       cmake-presets:
@@ -899,15 +899,19 @@ jobs:
         shell: python3 {0}
         run: |
           import json, tarfile, glob, os
+          from fnmatch import fnmatch
           arts = json.loads(r'''${{ matrix.consume-artifacts }}''')
-          # download-artifact lays the (already pattern-scoped) deps flat under
-          # build/.artifacts, so match tarballs anywhere under it.
-          tarballs = glob.glob('build/.artifacts/**/*.tar.gz', recursive=True)
-          if not tarballs:
-              # an optional dependency that resolved to nothing uploads no artifact
-              print("::warning::no dependency staging was downloaded; building without it")
+          # download-artifact lays each artifact into a folder of its name under
+          # build/.artifacts; an entry's tarballs, those of the artifacts its name
+          # matches, go into its own dir only
+          downloaded = sorted(os.listdir('build/.artifacts')) if os.path.isdir('build/.artifacts') else []
           for a in arts:
               os.makedirs(a["dir"], exist_ok=True)
+              tarballs = [t for d in downloaded if fnmatch(d, a["name"])
+                            for t in sorted(glob.glob(f'build/.artifacts/{d}/**/*.tar.gz', recursive=True))]
+              if not tarballs:
+                  # an optional dependency that resolved to nothing uploads no artifact
+                  print(f"::warning::no staging was downloaded for {a['name']}; building without it")
               for t in tarballs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")
