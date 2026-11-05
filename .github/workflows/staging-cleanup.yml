@@ -113,6 +113,8 @@ jobs:
               children, stale = {}, {}
               for digest in digests:
                   index = json.loads(oras(["manifest", "fetch", f"{path}@{digest}"], f"fetching {digest} failed"))
+                  if "manifests" not in index:
+                      continue   # a package tagged by its identity (pkg-…): it goes with the index that lists it
                   ts    = index.get("annotations", {}).get("org.opencontainers.image.created")   # push time
                   if ts is None:
                       print(f"::warning::{path}@{digest}: no created annotation, keeping")
