@@ -17,10 +17,6 @@ name: Staging Push
 # A child is named by its file; the com.opendaq.* annotations are optional, and buy a consumer a
 # resolve by settings rather than by file name.
 #
-# The index is tagged idx-<sha256> by its identity: the commit and the commits of its dependencies, lines key=value
-# of those annotations sorted and joined by \n. With axes, each package is tagged pkg-<sha256> by that and its
-# value of each axis. A consumer that knows what it wants pulls the package by that tag, reading no index.
-#
 # The run tag is unique to its index and says nothing more: one commit built against two cores
 # is two indexes, and a tag naming the commit could point at one of them only. What a package was
 # built from is in its annotations: the commit itself, and the commits of its dependencies from
@@ -39,9 +35,14 @@ on:
               "path": "ghcr.io/<org>/path/to/staging",   // the package, in full
               "artifacts": ["staging-*"],                // globs; each match becomes a child of its index
               "tags": ["latest", "v1.2.3"],              // extra tags; run-<run id>-<run attempt> is automatic
-              "axes": [                                  // optional: what tells its packages apart, as their
-                "com.opendaq.package.triplet",           // annotations; each package is tagged pkg-<sha256> by them
-                "com.opendaq.package.python"             // and the index's identity
+              "idx-identity": [                          // optional: the index tagged idx-<sha256> of these of
+                "org.opencontainers.image.revision",     // its annotations, lines key=value sorted, joined by \n
+                "com.opendaq.dependencies.core.revision"
+              ],
+              "pkg-identity": [                          // optional: each package tagged pkg-<sha256> of these
+                "org.opencontainers.image.revision",     // of its own annotations, alike
+                "com.opendaq.dependencies.core.revision",
+                "com.opendaq.package.triplet"
               ]
             },
             {                                            // one entry per kind: a tarball and a .deb are
@@ -122,9 +123,11 @@ jobs:
                   sys.exit(f"::error::oras {args[0]} failed")
               return run.stdout
 
-          def identity(prefix, annotations):
-              """<prefix>-<sha256> of the annotations, lines key=value sorted and joined by \\n."""
-              return f"{prefix}-" + hashlib.sha256("\n".join(sorted(f"{k}={v}" for k, v in annotations.items())).encode()).hexdigest()
+          def identity(prefix, annotations, keys, of):
+              """<prefix>-<sha256> of the annotations named, lines key=value sorted and joined by \\n; each must be there."""
+              if missing := [key for key in keys if key not in annotations]:
+                  sys.exit(f"::error::{of} has no {missing} of its identity")
+              return f"{prefix}-" + hashlib.sha256("\n".join(sorted(f"{key}={annotations[key]}" for key in keys)).encode()).hexdigest()
 
           def flatten(meta, prefix="com.opendaq"):
               """staging-meta.json as annotations: nested keys joined by dots, empty values left out."""
@@ -193,21 +196,16 @@ jobs:
                                        "org.opencontainers.image.revision":    sha,
                                        "org.opencontainers.image.source":      source,
                                        **deps[0]}
-              # the index's identity: its commit and its dependencies'
-              built = {"org.opencontainers.image.revision": sha, **deps[0]}
-              tags.append(identity("idx", built))
+              if staging.get("idx-identity"):
+                  tags.append(identity("idx", index["annotations"], staging["idx-identity"], f"the index of {base}"))
               json.dump(index, open("index.json", "w"), separators=(",", ":"))
               oras("manifest", "push", "--oci-layout", f"{layout}:index", "index.json",
                    "--media-type", "application/vnd.oci.image.index.v1+json")
 
               # one copy publishes the index with its packages; the packages land untagged, but for their identity
               oras("cp", "--from-oci-layout", f"{layout}:index", f"{base}:{','.join(tags)}")
-              pkg_tags = {}
-              for digest, ann in packages.items():
-                  if missing := [axis for axis in staging.get("axes", []) if axis not in ann]:
-                      sys.exit(f"::error::{ann['org.opencontainers.image.title']} has no {missing}")
-                  if staging.get("axes"):
-                      pkg_tags[digest] = identity("pkg", {**built, **{axis: ann[axis] for axis in staging["axes"]}})
+              pkg_tags = {digest: identity("pkg", ann, staging["pkg-identity"], ann["org.opencontainers.image.title"])
+                          for digest, ann in packages.items()} if staging.get("pkg-identity") else {}
               for digest, tag in pkg_tags.items():
                   oras("tag", f"{base}@{digest}", tag)
 
