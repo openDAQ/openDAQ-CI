@@ -15,7 +15,7 @@ on:
         type: string
         default: '[]'
       ref:
-        description: "reusable `ref`: the commit, branch or tag to build (empty: the run's own)."
+        description: "reusable `ref`, staging-push `revision`: the commit to build, in full (empty: the run's own)."
         type: string
         default: ''
       include-jobs:
@@ -81,3 +81,4 @@ jobs:
     uses: ./.github/workflows/staging-push.yml
     with:
       staging-packages: ${{ inputs.staging-push }}
+      revision: ${{ inputs.ref }}

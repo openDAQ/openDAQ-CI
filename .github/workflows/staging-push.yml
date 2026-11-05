@@ -43,6 +43,10 @@ on:
           ]
         type: string
         required: true
+      revision:
+        description: "The commit the stagings were built from, in full, e.g. 'a82fa899b78e23ddcf61975eb9255b22e713808' (empty: the run's own, github.sha)"
+        type: string
+        default: ''
 
 jobs:
   push:
@@ -65,7 +69,7 @@ jobs:
           STAGINGS: ${{ inputs.staging-packages }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ inputs.revision || github.sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           REPO: ${{ github.repository }}
