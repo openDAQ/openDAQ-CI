@@ -914,12 +914,16 @@ jobs:
           arts = json.loads(r'''${{ matrix.consume-artifacts }}''')
           # download-artifact lays each artifact into a folder of its name under
           # build/.artifacts; an entry's tarballs, those of the artifacts its name
-          # matches, go into its own dir only
+          # matches, go into its own dir only. One artifact alone it lays out flat,
+          # build/.artifacts itself: it is then the one entry's
           downloaded = sorted(os.listdir('build/.artifacts')) if os.path.isdir('build/.artifacts') else []
+          flat = downloaded and not any(fnmatch(d, a["name"]) for d in downloaded for a in arts)
+          if flat and len(arts) > 1:
+              raise SystemExit(f"::error::one artifact was downloaded flat, whose of {len(arts)} entries is unknown")
           for a in arts:
               os.makedirs(a["dir"], exist_ok=True)
-              tarballs = [t for d in downloaded if fnmatch(d, a["name"])
-                            for t in sorted(glob.glob(f'build/.artifacts/{d}/**/*.tar.gz', recursive=True))]
+              folders = ['build/.artifacts'] if flat else [f'build/.artifacts/{d}' for d in downloaded if fnmatch(d, a["name"])]
+              tarballs = [t for f in folders for t in sorted(glob.glob(f'{f}/**/*.tar.gz', recursive=True))]
               if not tarballs:
                   # an optional dependency that resolved to nothing uploads no artifact
                   print(f"::warning::no staging was downloaded for {a['name']}; building without it")
