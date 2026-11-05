@@ -7,8 +7,12 @@ on:
         description: "openDAQ commit, branch or tag. If empty, uses the opendaq_ref file from the repo."
         type: string
         default: ''
+      repository:
+        description: "The repository to build, e.g. 'openDAQ/OpcUaModules' (empty: the run's own, github.repository)"
+        type: string
+        default: ''
       ref:
-        description: "The commit, branch or tag of this repository to build, e.g. 'a82fa899b78e23ddcf61975eb9255b22e713808' (empty: the run's own, github.sha)"
+        description: "The commit, branch or tag of the repository to build, e.g. 'a82fa899b78e23ddcf61975eb9255b22e713808' (empty: the run's own, github.sha)"
         type: string
         default: ''
       include-jobs:
@@ -731,6 +735,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
+          repository: ${{ inputs.repository }}
           ref: ${{ inputs.ref }}
 
       - name: Setup CMake

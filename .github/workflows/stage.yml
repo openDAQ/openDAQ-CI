@@ -14,6 +14,10 @@ on:
         description: "staging-pull `deps`: packages to pull from ghcr before the build (empty -> no pull)."
         type: string
         default: '[]'
+      repository:
+        description: "reusable `repository`: the repository to build (empty: the run's own)."
+        type: string
+        default: ''
       ref:
         description: "reusable `ref`, staging-push `revision`: the commit to build, in full (empty: the run's own)."
         type: string
@@ -64,6 +68,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/reusable.yml
     with:
+      repository: ${{ inputs.repository }}
       ref: ${{ inputs.ref }}
       include-jobs: ${{ inputs.include-jobs }}
       cmake-presets: ${{ inputs.cmake-presets }}
