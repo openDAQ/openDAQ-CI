@@ -5,7 +5,8 @@ name: Stage
 #   staging-pull (optional) -> reusable (build / stage / test) -> staging-push (optional)
 #
 # Each side is gated by emptiness: no `staging-pull` -> no pull; no `staging-push` -> no push,
-# and the staging stays a run artifact (the PR / integration path). A flat facade -- it calls
+# and the staging stays a run artifact (the PR / integration path); `skip-staging-push` skips the
+# push of a `staging-push` given, as the caller decides at run time. A flat facade -- it calls
 # the primitives directly, never another facade. Self-checkout only: a repo builds itself.
 on:
   workflow_call:
@@ -50,6 +51,10 @@ on:
         description: "staging-push `stagings`: packages to publish to ghcr after the build (empty -> no push)."
         type: string
         default: '[]'
+      skip-staging-push:
+        description: "true: no push, the staging stays a run artifact, whatever `staging-push` is."
+        type: boolean
+        default: false
 
 jobs:
   pull:
@@ -79,7 +84,7 @@ jobs:
 
   push:
     needs: build
-    if: ${{ always() && needs.build.result == 'success' && inputs.staging-push != '[]' }}
+    if: ${{ always() && needs.build.result == 'success' && !inputs.skip-staging-push && inputs.staging-push != '[]' }}
     permissions:
       contents: read
       packages: write
