@@ -8,7 +8,8 @@ name: Staging Pull
 # workflow only downloads them. Two packages in one artifact may not share a file name -- they
 # would clobber each other in the dir, so that fails loudly.
 #
-# One matrix job per entry uploads one artifact, so a build consumes its own deps by name.
+# One matrix job per entry uploads one artifact, so a build consumes its own deps by name. An
+# entry whose artifact the run has already, uploaded by another job, is skipped: nothing is pulled.
 on:
   workflow_call:
     inputs:
@@ -43,22 +44,48 @@ jobs:
     permissions:
       packages: read
     steps:
-      # staging-check of this workflow's own version: a local action is looked for in the
-      # workspace, so the repository this workflow comes from is checked out there.
-      - name: Get staging-check
+      - name: Check the staging artifact
+        id: skip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          NAME: ${{ matrix.entry.artifact }}
+        shell: python3 {0}
+        run: |
+          import os, subprocess
+
+          repository = os.environ["REPOSITORY"]
+          run_id = os.environ["RUN_ID"]
+          name = os.environ["NAME"]
+          url = f"repos/{repository}/actions/runs/{run_id}/artifacts?name={name}"
+
+          count = subprocess.run(["gh", "api", url, "-q", ".total_count"],
+                                 capture_output=True, text=True, check=True).stdout
+          found = int(count) > 0
+          if found:
+              print(f"{name} is in the run already: nothing to pull")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"resolved={str(found).lower()}\n")
+
+      - name: Get the staging-check action
+        if: steps.skip.outputs.resolved != 'true'
         uses: actions/checkout@v6
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .openDAQ-CI
 
-      - name: Resolve
+      - name: Resolve the staging artifact
+        if: steps.skip.outputs.resolved != 'true'
         id: resolve
         uses: ./.openDAQ-CI/.github/actions/staging-check
         with:
           packages: ${{ format('[{0}]', toJSON(matrix.entry)) }}
 
-      - name: Pull
+      - name: Pull the staging artifact
+        if: steps.skip.outputs.resolved != 'true'
         id: pull
         shell: python3 {0}
         env:
@@ -91,8 +118,8 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"pulled={len(pulled)}\n")
 
-      - name: Upload deps
-        if: steps.pull.outputs.pulled != '0'
+      - name: Upload the staging artifact
+        if: steps.skip.outputs.resolved != 'true' && steps.pull.outputs.pulled != '0'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.entry.artifact }}
