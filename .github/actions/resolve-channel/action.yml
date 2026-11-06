@@ -1,10 +1,8 @@
 name: Resolve the channel
 description: >-
-  The channel a staging belongs to and whether it is published. Given a commit: where it lies -- a release/** branch
-  is stable, main is dev, elsewhere none. A workflow called by another (the bundle, a pull request) never publishes;
-  run by hand it always does, in dev when the commit lies on neither; run otherwise (a schedule) only when the commit
-  and every commit it is built against lie on one. Without a commit: the channel this run belongs to, release/*
-  stable, else dev.
+  Where a staging's commits lie, the caller decides on that whether to publish. Given a commit: a release/** branch
+  is stable, main is dev, elsewhere none, for the commit and each commit it is built against. Without a commit: the
+  channel this run belongs to, release/* stable, else dev.
 
 inputs:
   repository:
@@ -28,11 +26,11 @@ inputs:
 
 outputs:
   channel:
-    description: "stable, dev, or empty: the commit lies on no main or release/** and is not published."
+    description: "stable, dev, or empty: the commit lies on no main or release/**."
     value: ${{ steps.channel.outputs.channel }}
-  push:
-    description: "true or false: whether the staging is published."
-    value: ${{ steps.channel.outputs.push }}
+  released:
+    description: "true or false: the commit and every commit it is built against lie on main or release/** (true without a commit)."
+    value: ${{ steps.channel.outputs.released }}
   depends-channels:
     description: |-
       The channel of each commit it is built against, empty where it lies on no main or release/**:
@@ -49,7 +47,6 @@ runs:
         COMMIT: ${{ inputs.commit }}
         DEPENDS: ${{ inputs.depends }}
         GH_TOKEN: ${{ inputs.token }}
-        JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
       run: |
         import json, os, subprocess, urllib.parse
 
@@ -70,26 +67,19 @@ runs:
         if os.environ["COMMIT"]:
             own = channel(os.environ["REPOSITORY"], os.environ["COMMIT"])
             depends = {repository: channel(repository, commit) for repository, commit in json.loads(os.environ["DEPENDS"]).items()}
-            # the workflow of this job is the run's own (GITHUB_WORKFLOW_REF) unless another one called it
-            if not os.environ["JOB_WORKFLOW_REF"]:
-                print("::warning::job.workflow_ref is empty: taken as called, not published")
-            called = os.environ["JOB_WORKFLOW_REF"] != os.environ["GITHUB_WORKFLOW_REF"]
-            by_hand = not called and os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
-            push = not called and (by_hand or (bool(own) and all(depends.values())))
-            own = own or ("dev" if push else "")
+            released = bool(own) and all(depends.values())
             print(f"{os.environ['REPOSITORY']} {os.environ['COMMIT']}: {own or 'on no main or release/**'}")
             for repository, commit in json.loads(os.environ["DEPENDS"]).items():
                 print(f"  built against {repository} {commit}: {depends[repository] or 'on no main or release/**'}")
-            print(f"  {os.environ['JOB_WORKFLOW_REF'] or '?'} in {os.environ['GITHUB_WORKFLOW_REF']} "
-                  f"({os.environ['GITHUB_EVENT_NAME']}); published: {push}")
+            print(f"  released: {released}")
         else:
             # a pull request resolves the channel its change will build against, not the one its own
             # branch would publish to
             ref = os.environ.get("GITHUB_BASE_REF") or os.environ["GITHUB_REF_NAME"]
-            own, depends, push = ("stable" if ref.startswith("release/") else "dev"), {}, True
+            own, depends, released = ("stable" if ref.startswith("release/") else "dev"), {}, True
             print(f"{ref} -> {own}")
 
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"channel={own}\n")
-            f.write(f"push={str(push).lower()}\n")
+            f.write(f"released={str(released).lower()}\n")
             f.write(f"depends-channels={json.dumps(depends)}\n")
