@@ -1,25 +1,85 @@
 name: Resolve the channel
-description: The channel this run belongs to -- release/* is stable, everything else is dev.
+description: >-
+  Where a staging's commits lie, the caller decides on that whether to publish. Given a commit: a release/** branch
+  is stable, main is dev, elsewhere none, for the commit and each commit it is built against. Without a commit: the
+  channel this run belongs to, release/* stable, else dev.
+
+inputs:
+  repository:
+    description: "The repository of the commit, e.g. 'openDAQ/OpcUaModules' (with commit)."
+    required: false
+    default: ''
+  commit:
+    description: "The commit staged, in full, e.g. '485710c37d06bcc6b6c852e57fd27c0b2cce7d08' (empty: by this run's branch)."
+    required: false
+    default: ''
+  depends:
+    description: |-
+      The commits it is built against, in full, by repository (with commit):
+      {"openDAQ/openDAQ": "1a82fa899b78e23ddcf61975eb9255b22e713808"}
+    required: false
+    default: '{}'
+  token:
+    description: "Token the repositories are read with."
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   channel:
-    description: "stable or dev."
+    description: "stable, dev, or empty: the commit lies on no main or release/**."
     value: ${{ steps.channel.outputs.channel }}
+  released:
+    description: "true or false: the commit and every commit it is built against lie on main or release/** (true without a commit)."
+    value: ${{ steps.channel.outputs.released }}
+  depends-channels:
+    description: |-
+      The channel of each commit it is built against, empty where it lies on no main or release/**:
+      {"openDAQ/openDAQ": "dev"}
+    value: ${{ steps.channel.outputs.depends-channels }}
 
 runs:
   using: composite
   steps:
     - id: channel
-      shell: bash
+      shell: python3 {0}
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+        COMMIT: ${{ inputs.commit }}
+        DEPENDS: ${{ inputs.depends }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
-        # a pull request resolves the channel its change will build against, not the one its own
-        # branch would publish to
-        ref="${GITHUB_BASE_REF:-$GITHUB_REF_NAME}"
+        import json, os, subprocess, urllib.parse
 
-        case "$ref" in
-          release/*) channel=stable ;;
-          *)         channel=dev    ;;
-        esac
+        def gh(*args):
+            """gh api's answer, empty when it fails (a commit the repository has not)."""
+            return subprocess.run(["gh", "api", *args], capture_output=True, text=True).stdout
 
-        echo "channel=$channel" >> "$GITHUB_OUTPUT"
-        echo "$ref -> $channel"
+        def channel(repository, commit):
+            """stable when the commit lies on a release/** branch (looked at first), dev on main, else empty."""
+            branches = [b for b in gh(f"repos/{repository}/branches", "--paginate", "-q", ".[].name").split()
+                        if b.startswith("release/")] + ["main"]
+            for branch in branches:
+                status = gh(f"repos/{repository}/compare/{urllib.parse.quote(branch, safe='')}...{commit}", "-q", ".status")
+                if status.strip() in ("identical", "behind"):
+                    return "stable" if branch.startswith("release/") else "dev"
+            return ""
+
+        if os.environ["COMMIT"]:
+            own = channel(os.environ["REPOSITORY"], os.environ["COMMIT"])
+            depends = {repository: channel(repository, commit) for repository, commit in json.loads(os.environ["DEPENDS"]).items()}
+            released = bool(own) and all(depends.values())
+            print(f"{os.environ['REPOSITORY']} {os.environ['COMMIT']}: {own or 'on no main or release/**'}")
+            for repository, commit in json.loads(os.environ["DEPENDS"]).items():
+                print(f"  built against {repository} {commit}: {depends[repository] or 'on no main or release/**'}")
+            print(f"  released: {released}")
+        else:
+            # a pull request resolves the channel its change will build against, not the one its own
+            # branch would publish to
+            ref = os.environ.get("GITHUB_BASE_REF") or os.environ["GITHUB_REF_NAME"]
+            own, depends, released = ("stable" if ref.startswith("release/") else "dev"), {}, True
+            print(f"{ref} -> {own}")
+
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"channel={own}\n")
+            f.write(f"released={str(released).lower()}\n")
+            f.write(f"depends-channels={json.dumps(depends)}\n")
