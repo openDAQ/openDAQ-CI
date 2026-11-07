@@ -27,6 +27,10 @@ on:
         description: "reusable `include-jobs`."
         type: string
         default: '["*"]'
+      exclude-jobs:
+        description: "reusable `exclude-jobs`; staging-pull's too, its entries for those jobs not pulled."
+        type: string
+        default: '[]'
       cmake-presets:
         description: "reusable `cmake-presets`."
         type: string
@@ -65,6 +69,7 @@ jobs:
     uses: ./.github/workflows/staging-pull.yml
     with:
       staging-artifacts: ${{ inputs.staging-pull }}
+      exclude-jobs: ${{ inputs.exclude-jobs }}
 
   build:
     needs: pull
@@ -76,6 +81,7 @@ jobs:
       repository: ${{ inputs.repository }}
       ref: ${{ inputs.ref }}
       include-jobs: ${{ inputs.include-jobs }}
+      exclude-jobs: ${{ inputs.exclude-jobs }}
       cmake-presets: ${{ inputs.cmake-presets }}
       cpack-presets: ${{ inputs.cpack-presets }}
       packages: ${{ inputs.packages }}
