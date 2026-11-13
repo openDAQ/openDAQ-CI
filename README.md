@@ -15,6 +15,7 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
   - [Usage](#usage)
     - [Basic](#basic)
     - [Upstream Ref](#upstream-ref)
+    - [Another Repository or Commit](#another-repository-or-commit)
     - [Include Jobs](#include-jobs)
     - [Exclude Jobs](#exclude-jobs)
     - [Exclude Tests](#exclude-tests)
@@ -24,6 +25,13 @@ This repository contains reusable GitHub Actions CI workflows for openDAQ-based 
     - [Build Stagings and Installers](#build-stagings-and-installers)
     - [Consume Stagings](#consume-stagings)
     - [Rename Artifacts](#rename-artifacts)
+    - [Job Timeout](#job-timeout)
+- [Stage Workflow](#stage-workflow)
+  - [Inputs](#inputs-1)
+  - [Overview](#overview-1)
+    - [Pipeline](#pipeline)
+    - [Staging Structure](#staging-structure)
+    - [Tags and Identity](#tags-and-identity)
 - [License](#license)
 
 ## Unified Reusable Workflow
@@ -41,6 +49,18 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     # Format: tag, branch, or SHA
     # Optional: '' - empty string, resolved by the caller
     opendaq-ref: ''
+
+    # The repository to check out and build.
+    # Format: owner/name
+    # Optional: '' - empty string, the run's own repository
+    # Example: 'openDAQ/OpcUaModules'
+    repository: ''
+
+    # The commit, branch or tag of that repository to build.
+    # Format: tag, branch, or SHA
+    # Optional: '' - empty string, the run's own commit
+    # Example: '5cfded5f006a11131743901e3befa276d6efe14b'
+    ref: ''
 
     # Include matrix jobs by name.
     # Format: JSON array of strings
@@ -72,8 +92,9 @@ The unified `reusable.yml` workflow is designed to provide a centralized approac
     #   run                — run after packages setup (optional, last match wins)
     #   artifacts          — dependency stagings to consume (optional, collect)
     #                        each entry {name, dir}: name is a download-artifact glob,
-    #                        dir is the extract target; downloaded and extracted before
-    #                        configure so the build resolves them via find_package
+    #                        dir is the extract target of the artifacts it matches only;
+    #                        downloaded and extracted before configure so the build
+    #                        resolves them via find_package
     #                        (point CMAKE_PREFIX_PATH at dir via cmake-presets)
     # Optional: [] empty, no extra packages
     # Example: >
@@ -286,7 +307,7 @@ The generate stage takes the full set of matrix jobs and processes them as follo
 Each CI matrix job runs the following steps:
 
 ```bash
-# Checkout the caller project
+# Checkout the caller project (`repository` at `ref`, if given)
 git checkout <project-url>
 
 # Setup cmake (via jwlawson/actions-setup-cmake@v2)
@@ -323,7 +344,7 @@ cat > CMakeUserPresets.json <<'EOF'
 EOF
 
 # Download + extract dependency stagings (if packages.artifacts is set)
-# into their target dir, e.g. staging-deps/
+# each entry's artifacts into its own dir, e.g. staging-deps/
 
 # Configure (the FetchContent sources are restored before and saved after, if cache-externals via cmake-presets)
 cmake --preset <job-name>
@@ -421,6 +442,26 @@ jobs:
           {
             "configure-preset": "module",
             "test-preset": "module-test"
+          }
+        ]
+```
+
+#### Another Repository or Commit
+
+To build a commit other than the run's own, or another repository, give `ref` and `repository`:
+
+```yaml
+jobs:
+  ci:
+    name: My Module
+    uses: openDAQ/openDAQ-CI/.github/workflows/reusable.yml@main
+    with:
+      repository: 'openDAQ/my-module'
+      ref: '5cfded5f006a11131743901e3befa276d6efe14b'
+      cmake-presets: >
+        [
+          {
+            "configure-preset": "module"
           }
         ]
 ```
@@ -774,6 +815,21 @@ Each entry's `name` is a `download-artifact` glob; every matching artifact is do
 
 Scope the glob with `match-jobs` so each job pulls **only** the staging matching its platform — a broad `"core-staging-*"` would match every platform's artifact and extract them into the same directory, leaving `find_package` with the wrong triplet.
 
+Several stagings go into several directories: each entry's `dir` gets the artifacts its `name` matches, and no others:
+
+```yaml
+      packages: >
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "artifacts": [
+              { "name": "core-staging-ubuntu-*",      "dir": "prefix/core" },
+              { "name": "my-module-staging-ubuntu-*", "dir": "prefix/my-module" }
+            ]
+          }
+        ]
+```
+
 #### Rename Artifacts
 
 To call the reusable workflow multiple times within the same workflow, use `upload-pattern` to avoid artifact name collisions:
@@ -860,6 +916,113 @@ with:
 ```
 
 The caller expects Windows runners to have 240-minute timeout. But instead all runners including Windows will get 180-minute timeout.
+
+## Stage Workflow
+
+The `stage.yml` workflow builds a project's stagings and publishes them to an OCI registry (ghcr), where other projects find them by what they were built from: a module pulls the core's staging instead of building the core.
+
+### Inputs
+
+```yaml
+- uses: openDAQ/openDAQ-CI/.github/workflows/stage.yml@main
+  with:
+    # Passed to reusable.yml as they are, see its inputs:
+    #   repository, ref, include-jobs, cmake-presets, cpack-presets, packages,
+    #   upload-pattern, timeout
+    # ref is also the revision the published stagings record.
+
+    # Exclude matrix jobs by name; reusable's exclude-jobs, and the pull's too:
+    # a staging-pull entry whose match-jobs are all excluded is not pulled.
+    # Format: JSON array of strings
+    # Pattern: wildcard
+    # Optional: [] empty, no jobs excluded
+    # Example: '["manylinux*", "windows-*-x86-*"]'
+    exclude-jobs: ''
+
+    # Stagings to pull from the registry before the build, one artifact per entry.
+    # Format: JSON array of objects
+    # Fields:
+    #   match-jobs — job names list the entry is for (optional)
+    #   artifact   — the artifact name to upload (required)
+    #   packages   — the packages to pull into it (required), each:
+    #                path        — the package, in full
+    #                annotations — globs; every matching package is pulled
+    #                optional    — true: resolving to nothing is a warning (optional)
+    # Optional: [] empty, no pull
+    staging-pull: ''
+
+    # Stagings to publish to the registry after the build, one OCI index per entry.
+    # Format: JSON array of objects
+    # Fields:
+    #   path         — the package, in full (required)
+    #   artifacts    — globs of the run's artifacts; each match becomes a package (required)
+    #   tags         — extra tags of the index (optional); run-<id>-<attempt> is automatic
+    #   idx-identity — annotations the index is tagged idx-<sha256> of (optional)
+    #   pkg-identity — annotations each package is tagged pkg-<sha256> of (optional)
+    # Optional: [] empty, no push
+    # See: Overview / Staging Structure, Tags and Identity
+    staging-push: ''
+
+    # Build only: nothing is published, whatever staging-push is.
+    # Format: boolean
+    # Optional: false
+    skip-staging-push: false
+```
+
+### Overview
+
+#### Pipeline
+
+```
+staging-pull ──► reusable ──► staging-push
+(if staging-pull)  build,       (if staging-push,
+                   stage, test   not skip-staging-push)
+```
+
+Each side is gated by its input: no `staging-pull`, no pull; no `staging-push` or `skip-staging-push`, no push, and the stagings stay artifacts of the run.
+
+#### Staging Structure
+
+A `staging-push` entry publishes one OCI index per run at its `path`; the index lists one package per artifact matched, a package per platform. Each package is a manifest whose layer is the tarball, its annotations taken from the `staging-meta.json` in it (`com.opendaq.*`); the index carries the commit built and the commits of its dependencies.
+
+```
+ghcr.io/<org>/dev/staging/my-module                           ← path
+  └─ index    run-<id>-<attempt>, idx-<sha256>
+     │        org.opencontainers.image.revision=<commit>
+     │        com.opendaq.dependencies.opendaq.revision=<commit>
+     ├─ package   pkg-<sha256>
+     │            title=my-module-1.0.0-x86_64-linux-gcc-11-release.tar.gz
+     │            com.opendaq.package.triplet=x86_64-linux-gcc-11-release
+     │            org.opencontainers.image.revision, com.opendaq.dependencies.*  (as the index)
+     └─ package   pkg-<sha256>
+                  title=my-module-1.0.0-armv8-macos-apple-clang-21-release.tar.gz
+                  ...
+```
+
+An index and its packages are published in one copy, and each package is tagged `pkg-<sha256>` after it (see [Tags and Identity](#tags-and-identity)), so a set is never seen in part. `staging-cleanup.yml` prunes through the index: a stale index's packages, then the index.
+
+#### Tags and Identity
+
+Every index is tagged `run-<run id>-<run attempt>`, by the run that published it, and with the entry's `tags`, if any.
+
+An entry's `idx-identity` tags the index `idx-<sha256>`, and its `pkg-identity` tags each package `pkg-<sha256>`. The hash is sha256 of the annotations named, as lines `key=value`, sorted bytewise and joined by `\n` (no newline at the end); an annotation missing fails the push. The index is identified by what it was built from, the commit and its dependencies' commits; a package by the same and its triplet. A consumer computes the tag of what it needs and pulls it, without listing the registry:
+
+```bash
+identity() { printf '%s\n' "$@" | LC_ALL=C sort | awk 'NR > 1 { printf "\n" } { printf "%s", $0 }' | shasum -a 256 | cut -d' ' -f1; }
+
+REVISION=a94532cf583624e6c28d3626a2b56cf5d8378966   # the commit staged
+OPENDAQ=1a82fa899b78e23ddcf61975eb9255b22e713808    # the core it is built against
+TRIPLET=x86_64-linux-gcc-11-release
+
+IDX="idx-$(identity org.opencontainers.image.revision=$REVISION \
+                    com.opendaq.dependencies.opendaq.revision=$OPENDAQ)"
+PKG="pkg-$(identity org.opencontainers.image.revision=$REVISION \
+                    com.opendaq.dependencies.opendaq.revision=$OPENDAQ \
+                    com.opendaq.package.triplet=$TRIPLET)"
+
+oras manifest fetch ghcr.io/<org>/dev/staging/my-module:$IDX   # the index, every platform
+oras pull ghcr.io/<org>/dev/staging/my-module:$PKG             # the package of one platform
+```
 
 ## License
 
