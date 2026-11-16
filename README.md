@@ -986,7 +986,7 @@ Each side is gated by its input: no `staging-pull`, no pull; no `staging-push` o
 A `staging-push` entry publishes one OCI index per run at its `path`; the index lists one package per artifact matched, a package per platform. Each package is a manifest whose layer is the tarball, its annotations taken from the `staging-meta.json` in it (`com.opendaq.*`); the index carries the commit built and the commits of its dependencies.
 
 ```
-ghcr.io/<org>/dev/staging/my-module                           ← path
+ghcr.io/<org>/staging/my-module                               ← path
   └─ index    run-<id>-<attempt>, idx-<sha256>
      │        org.opencontainers.image.revision=<commit>
      │        com.opendaq.dependencies.opendaq.revision=<commit>
@@ -1020,8 +1020,8 @@ PKG="pkg-$(identity org.opencontainers.image.revision=$REVISION \
                     com.opendaq.dependencies.opendaq.revision=$OPENDAQ \
                     com.opendaq.package.triplet=$TRIPLET)"
 
-oras manifest fetch ghcr.io/<org>/dev/staging/my-module:$IDX   # the index, every platform
-oras pull ghcr.io/<org>/dev/staging/my-module:$PKG             # the package of one platform
+oras manifest fetch ghcr.io/<org>/staging/my-module:$IDX   # the index, every platform
+oras pull ghcr.io/<org>/staging/my-module:$PKG             # the package of one platform
 ```
 
 ## License
