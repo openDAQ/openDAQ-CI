@@ -135,8 +135,15 @@ jobs:
               # every index is tagged by its run, run-<id>-<attempt>, and tags/list is OCI's only enumeration;
               # the other tags (idx-, pkg-, latest) name the same indexes or their packages, so only run tags are
               # resolved, each to its index
+              # a path nothing was published to yet has no tags to list
+              listing = subprocess.run(["oras", "repo", "tags", path], text=True, capture_output=True)
+              if listing.returncode != 0:
+                  if "name unknown" in listing.stderr:
+                      print(f"{path}: not in the registry, nothing to prune")
+                      continue
+                  sys.exit(f"::error::listing tags for {path} failed: {listing.stderr.strip()}")
               digests = {}
-              for tag in oras(["repo", "tags", path], f"listing tags for {path} failed").split():
+              for tag in listing.stdout.split():
                   if not tag.startswith("run-"):
                       continue
                   desc = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"], f"resolving {tag} failed")
