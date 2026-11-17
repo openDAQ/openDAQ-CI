@@ -999,7 +999,7 @@ ghcr.io/<org>/staging/my-module                               ← path
                   ...
 ```
 
-An index and its packages are published in one copy, and each package is tagged `pkg-<sha256>` after it (see [Tags and Identity](#tags-and-identity)), so a set is never seen in part. `staging-cleanup.yml` prunes through the index: a stale index's packages, then the index.
+An index and its packages are published in one copy, and each package is tagged `pkg-<sha256>` after it (see [Tags and Identity](#tags-and-identity)), so a set is never seen in part. `staging-cleanup.yml` prunes through the index: a stale index's packages, then the index. An index past its retention is kept when it is a release: its `org.opencontainers.image.revision` is a commit of the calling repository that a tag `vX.Y.Z` points at, lying on `release/X.Y`, and so is its `com.opendaq.dependencies.opendaq.revision`, if it has one, in the core repository.
 
 #### Tags and Identity
 
