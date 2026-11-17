@@ -73,8 +73,9 @@ jobs:
           { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/dev-core",  "artifacts": ["cleanup-core-dev"] }
         ]
 
+  # after push-release: two pushes of one blob at once into new paths make ghcr lose the manifest
   push-dev:
-    needs: artifact
+    needs: push-release
     permissions:
       contents: read
       packages: write
