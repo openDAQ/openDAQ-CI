@@ -1,0 +1,119 @@
+name: Integration Tests
+
+# Runs openDAQ's integration tests against one combination of the core and the modules the tests load: each one
+# bundle.json's commit, unless the caller names another. openDAQ-bundle's resolve.yml lays their stagings into this
+# run -- pulled from ghcr when there, staged here (never pushed) when not -- and Integration-tests'
+# integration-tests-prebuilt.yml builds its test apps against them and runs them:
+#
+#   caller (a core or module repository)
+#    └─ integration-tests.yml
+#         ├─ resolve  openDAQ-bundle resolve.yml  → <staging>-staging-<job>: opendaq, opcua-modules, lt-streaming-modules
+#         ├─ test     Integration-tests' prebuilt test job, on the stagings of this run
+#         └─ result   the caller's one check, and a summary
+#
+# A caller grants "contents: read" and "packages: write" -- resolve.yml's stage jobs ask for write, which GitHub checks
+# when the run starts, though nothing is pushed from here -- and needs read access to the staging packages: a called
+# workflow's token is the caller's. It calls this workflow once per run, from a run that uploads no
+# <staging>-staging-* or integration-tests-* artifacts of its own, e.g. from a workflow file of its own. Concurrency
+# and run-name are the caller's.
+on:
+  workflow_call:
+    inputs:
+      opendaq:
+        description: "openDAQ: a commit, branch or tag (empty: bundle.json's)"
+        type: string
+        default: ''
+      opcua-modules:
+        description: "OpcUaModules: a commit, branch or tag (empty: bundle.json's)"
+        type: string
+        default: ''
+      lt-streaming-modules:
+        description: "LTStreamingModulesModern: a commit, branch or tag (empty: bundle.json's)"
+        type: string
+        default: ''
+    outputs:
+      revisions:
+        description: "The commits tested: a JSON object, staging → full sha"
+        value: ${{ jobs.resolve.outputs.revisions }}
+      matrix:
+        description: "The test jobs, openDAQ-CI's matrix, with the name of each one's test results artifact"
+        value: ${{ jobs.test.outputs.matrix }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The commits, and the three stagings in this run as <staging>-staging-<job>; MQTT and ASAM-CMP are left out, the
+  # tests load neither. A ref, here and below, cannot come from an expression: these are development branches until
+  # the release, which tags them
+  resolve:
+    name: Resolve
+    permissions:
+      contents: read
+      packages: write     # asked for by resolve.yml's stage jobs, whose push never runs from here
+    uses: openDAQ/openDAQ-bundle/.github/workflows/resolve.yml@jira/TBBAS-3611-bundle-from-stagings-and-sources
+    with:
+      opendaq: ${{ inputs.opendaq }}
+      opcua-modules: ${{ inputs.opcua-modules }}
+      lt-streaming-modules: ${{ inputs.lt-streaming-modules }}
+      exclude-stagings: mqtt-module;asam-cmp-modules
+      # Once resolve.yml takes it: the platforms of the test job below, which move with its ref
+      # include-jobs: '["ubuntu-22.04-x86_64-ninja-gcc-release"]'
+
+  # Once the commits are known, also when a stage failed: the test job's check names the staging that is missing on
+  # its platform. The commits are given so that it checks the run holds the stagings of exactly these
+  test:
+    name: Test
+    needs: resolve
+    if: ${{ !cancelled() && needs.resolve.outputs.revisions != '' }}
+    permissions:
+      contents: read
+      packages: read      # asked for by the test job's pull, which run mode skips
+    uses: openDAQ/Integration-tests/.github/workflows/integration-tests-prebuilt.yml@Prebuild-stagings
+    with:
+      staging-source: run
+      opendaq-revision: ${{ fromJSON(needs.resolve.outputs.revisions)['opendaq'] }}
+      opcua-modules-revision: ${{ fromJSON(needs.resolve.outputs.revisions)['opcua-modules'] }}
+      lt-streaming-modules-revision: ${{ fromJSON(needs.resolve.outputs.revisions)['lt-streaming-modules'] }}
+
+  # One check for the caller to require, whichever of the jobs above failed or was skipped
+  result:
+    name: Result
+    needs: [resolve, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize
+        shell: python3 {0}
+        env:
+          REVISIONS: ${{ needs.resolve.outputs.revisions }}
+          RESOLVE: ${{ needs.resolve.result }}
+          TEST: ${{ needs.test.result }}
+          CALLER: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
+        run: |
+          import json, os, sys
+
+          repositories = {"opendaq": "openDAQ", "opcua-modules": "OpcUaModules",
+                          "lt-streaming-modules": "LTStreamingModulesModern"}
+          revisions = json.loads(os.environ["REVISIONS"] or "{}")
+          resolve, test = os.environ["RESOLVE"], os.environ["TEST"]
+          caller, caller_sha = os.environ["CALLER"], os.environ["CALLER_SHA"]
+
+          summary = ["### Integration tests", "",
+                     f"Called from [`{caller}`](https://github.com/{caller}) at "
+                     f"[`{caller_sha[:12]}`](https://github.com/{caller}/commit/{caller_sha})", ""]
+          if revisions:
+              summary += ["| Staging | Commit |", "|-|-|"]
+              summary += [f"| {staging} | [`{sha[:12]}`](https://github.com/openDAQ/"
+                          f"{repositories.get(staging, staging)}/commit/{sha}) |" for staging, sha in revisions.items()]
+          else:
+              summary += ["The commits were not resolved."]
+          summary += ["", f"Resolve: **{resolve}**, test: **{test}**"]
+          print("\n".join(summary))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(summary) + "\n")
+
+          if resolve != "success" or test != "success":
+              sys.exit(f"::error title=Integration tests::resolve {resolve}, test {test}")
