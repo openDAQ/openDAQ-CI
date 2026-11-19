@@ -7,6 +7,14 @@ on:
         description: "openDAQ commit, branch or tag. If empty, uses the opendaq_ref file from the repo."
         type: string
         default: ''
+      repository:
+        description: "The repository to build, e.g. 'openDAQ/OpcUaModules' (empty: the run's own, github.repository)"
+        type: string
+        default: ''
+      ref:
+        description: "The commit, branch or tag of the repository to build, e.g. 'a82fa899b78e23ddcf61975eb9255b22e713808' (empty: the run's own, github.sha)"
+        type: string
+        default: ''
       include-jobs:
         description: "JSON array of wildcard patterns to include matrix jobs, e.g. '[\"ubuntu-*\"]'"
         type: string
@@ -16,7 +24,7 @@ on:
         type: string
         default: '[]'
       packages:
-        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]. May also pull dependency stagings: "artifacts": [{"name": "core-staging-*", "dir": "staging-deps"}] (* -> job name; extracted into dir before configure).'
+        description: 'JSON array of package requests, e.g. [{"match-jobs": ["ubuntu-*"], "apt-install": ["libpcap-dev"]}]. May also pull dependency stagings: "artifacts": [{"name": "core-staging-*", "dir": "staging-deps"}] (name: a download-artifact glob; the tarballs of the artifacts it matches are extracted into its own dir before configure).'
         type: string
         default: '[]'
       cmake-presets:
@@ -726,6 +734,9 @@ jobs:
         run: git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
 
       - name: Setup CMake
         uses: jwlawson/actions-setup-cmake@v2
@@ -899,15 +910,23 @@ jobs:
         shell: python3 {0}
         run: |
           import json, tarfile, glob, os
+          from fnmatch import fnmatch
           arts = json.loads(r'''${{ matrix.consume-artifacts }}''')
-          # download-artifact lays the (already pattern-scoped) deps flat under
-          # build/.artifacts, so match tarballs anywhere under it.
-          tarballs = glob.glob('build/.artifacts/**/*.tar.gz', recursive=True)
-          if not tarballs:
-              # an optional dependency that resolved to nothing uploads no artifact
-              print("::warning::no dependency staging was downloaded; building without it")
+          # download-artifact lays each artifact into a folder of its name under
+          # build/.artifacts; an entry's tarballs, those of the artifacts its name
+          # matches, go into its own dir only. One artifact alone it lays out flat,
+          # build/.artifacts itself: it is then the one entry's
+          downloaded = sorted(os.listdir('build/.artifacts')) if os.path.isdir('build/.artifacts') else []
+          flat = downloaded and not any(fnmatch(d, a["name"]) for d in downloaded for a in arts)
+          if flat and len(arts) > 1:
+              raise SystemExit(f"::error::one artifact was downloaded flat, whose of {len(arts)} entries is unknown")
           for a in arts:
               os.makedirs(a["dir"], exist_ok=True)
+              folders = ['build/.artifacts'] if flat else [f'build/.artifacts/{d}' for d in downloaded if fnmatch(d, a["name"])]
+              tarballs = [t for f in folders for t in sorted(glob.glob(f'{f}/**/*.tar.gz', recursive=True))]
+              if not tarballs:
+                  # an optional dependency that resolved to nothing uploads no artifact
+                  print(f"::warning::no staging was downloaded for {a['name']}; building without it")
               for t in tarballs:
                   tarfile.open(t).extractall(a["dir"])
                   print(f"extracted {t} -> {a['dir']}/")

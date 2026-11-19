@@ -1,11 +1,23 @@
 name: Test Cleanup CI
 
-# Self-contained, end-to-end exercise of staging-cleanup. `artifact` packs a text file into a
-# tarball and uploads it; `push` publishes it through the real staging-push (which stamps the
-# index with its push time); `cleanup` prunes with a 1-second retention -- minutes pass between
-# jobs, so the freshly pushed index is already past it; `verify` asserts the path is empty. This
-# covers the whole OCI-native path: the created annotation staging-push writes, the age filter,
-# and `oras manifest delete`. Run-scoped so parallel PRs never clash.
+# Self-contained, end-to-end exercise of staging-cleanup. `artifact` packs throwaway tarballs, two
+# with a staging-meta.json naming the core they are built against; `push-*` publish them through the
+# real staging-push (which stamps each index with its push time), one index per path, as the run tag
+# would move between indexes of one path; `cleanup` prunes with a 1-second retention -- minutes pass
+# between jobs, so every index is already past it; `verify` asserts the releases stayed and the rest
+# is gone, then deletes what stayed.
+#
+# A release is a commit a tag vX.Y.Z points at, lying on release/X.Y. The fixture here is v0.0.0 on
+# release/0.0, the initial commit; the core's are openDAQ/openDAQ's v3.40.4 and, not a release, a
+# commit of main:
+#
+#   path       revision         core          expected
+#   release    v0.0.0           -             kept
+#   with-core  v0.0.0           v3.40.4       kept
+#   dev-core   v0.0.0           main commit   pruned
+#   dev        the run's        -             pruned
+#
+# Run-scoped so parallel PRs never clash.
 on:
   pull_request:
   workflow_dispatch:
@@ -14,29 +26,56 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  BASE: ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}
+
 jobs:
   artifact:
     runs-on: ubuntu-latest
     steps:
-      # two artifacts so the index gets two children -- and so download-artifact nests each under
-      # its own directory (a lone artifact is unpacked flat, which staging-push's glob would miss)
+      # several artifacts, so download-artifact nests each under its own directory (a lone artifact
+      # is unpacked flat, which staging-push's glob would miss)
       - name: Pack throwaway packages
         run: |
-          for arch in x86_64 armv8; do
-            echo "hello $arch" > "hello-$arch.txt"
-            tar czf "hello-$arch.tar.gz" "hello-$arch.txt"
+          for name in plain core-release core-dev; do
+            mkdir "$name"
+            echo "hello $name" > "$name/hello.txt"
+            tar czf "$name/hello-$name.tar.gz" -C "$name" hello.txt
+            rm "$name/hello.txt"
           done
+          echo '{"dependencies": {"opendaq": {"revision": "0b636ad419e123c1036e181746cefab526440336"}}}' > core-release/staging-meta.json
+          echo '{"dependencies": {"opendaq": {"revision": "1a82fa899b78e23ddcf61975eb9255b22e713808"}}}' > core-dev/staging-meta.json
       - uses: actions/upload-artifact@v7
         with:
-          name: cleanup-x86_64
-          path: hello-x86_64.tar.gz
+          name: cleanup-plain
+          path: plain
       - uses: actions/upload-artifact@v7
         with:
-          name: cleanup-armv8
-          path: hello-armv8.tar.gz
+          name: cleanup-core-release
+          path: core-release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cleanup-core-dev
+          path: core-dev
 
-  push:
+  push-release:
     needs: artifact
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/staging-push.yml
+    with:
+      revision: acd6cbf87e5026423682ff9f092ad1dbe4b95fd7   # v0.0.0, on release/0.0
+      staging-packages: >-
+        [
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/release",   "artifacts": ["cleanup-plain"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/with-core", "artifacts": ["cleanup-core-release"] },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/dev-core",  "artifacts": ["cleanup-core-dev"] }
+        ]
+
+  # after push-release: two pushes of one blob at once into new paths make ghcr lose the manifest
+  push-dev:
+    needs: push-release
     permissions:
       contents: read
       packages: write
@@ -44,11 +83,11 @@ jobs:
     with:
       staging-packages: >-
         [
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}", "artifacts": ["cleanup-*"] }
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/dev", "artifacts": ["cleanup-plain"] }
         ]
 
   cleanup:
-    needs: push
+    needs: [push-release, push-dev]
     permissions:
       packages: write
     uses: ./.github/workflows/staging-cleanup.yml
@@ -56,37 +95,63 @@ jobs:
       dry-run: false
       staging-retentions: >-
         [
-          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}", "retention": { "seconds": 1 } }
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/release",   "retention": { "seconds": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/with-core", "retention": { "seconds": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/dev-core",  "retention": { "seconds": 1 } },
+          { "path": "ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}/dev",       "retention": { "seconds": 1 } }
         ]
 
   verify:
-    needs: cleanup
+    needs: [push-release, push-dev, cleanup]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
-      packages: read
+      packages: write
     steps:
       - name: Setup ORAS
         uses: oras-project/setup-oras@v1
 
-      - name: Assert the path is empty
+      - name: Assert the releases stayed and the rest is gone
+        if: needs.cleanup.result == 'success'
         shell: python3 {0}
         env:
-          BASE: ghcr.io/${{ github.repository_owner }}/test/cleanup/run-${{ github.run_id }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
         run: |
-          import subprocess, sys, os
+          import os, subprocess, sys
 
-          base  = os.environ["BASE"].lower()
-          token = os.environ["TOKEN"]
-          actor = os.environ["ACTOR"]
+          base = os.environ["BASE"].lower()
+          subprocess.run(["oras", "login", "ghcr.io", "-u", os.environ["ACTOR"], "--password-stdin"],
+                         input=os.environ["TOKEN"], text=True, check=True)
 
-          subprocess.run(["oras", "login", "ghcr.io", "-u", actor, "--password-stdin"],
-                         input=token, text=True, check=True)
-          # once the last version is gone the package disappears, so a failed listing means pruned
-          r = subprocess.run(["oras", "repo", "tags", base], text=True, capture_output=True)
-          tags = r.stdout.split() if r.returncode == 0 else []
-          print(f"remaining tags: {tags}")
-          if tags:
-              sys.exit(f"::error::tags survived cleanup: {tags}")
-          print("ok: index pruned, path empty")
+          failed = False
+          for name, kept in [("release", True), ("with-core", True), ("dev-core", False), ("dev", False)]:
+              # once the last version is gone the package disappears, so a failed listing means pruned
+              r = subprocess.run(["oras", "repo", "tags", f"{base}/{name}"], text=True, capture_output=True)
+              tags = r.stdout.split() if r.returncode == 0 else []
+              ok = bool(tags) == kept
+              failed |= not ok
+              print(f"{'ok' if ok else 'FAIL'}: {name} {'kept' if tags else 'pruned'} {tags}, expected {'kept' if kept else 'pruned'}")
+          if failed:
+              sys.exit("::error::cleanup kept or pruned the wrong indexes")
+
+      # the releases stay for any cleanup, so they are deleted here, as the packages they are
+      - name: Delete the test packages
+        if: always()
+        shell: python3 {0}
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          import os, urllib.error, urllib.parse, urllib.request
+
+          _, org, *path = os.environ["BASE"].lower().split("/")
+          for name in ["release", "with-core", "dev-core", "dev"]:
+              package = urllib.parse.quote("/".join(path + [name]), safe="")
+              req = urllib.request.Request(f"https://api.github.com/orgs/{org}/packages/container/{package}", method="DELETE",
+                                           headers={"Authorization": f"Bearer {os.environ['TOKEN']}",
+                                                    "Accept": "application/vnd.github+json"})
+              try:
+                  urllib.request.urlopen(req)
+                  print(f"deleted {name}")
+              except urllib.error.HTTPError as e:
+                  print(f"{name}: {e.code}" + (" (gone already)" if e.code == 404 else ""))

@@ -34,7 +34,16 @@ on:
             {
               "path": "ghcr.io/<org>/path/to/staging",   // the package, in full
               "artifacts": ["staging-*"],                // globs; each match becomes a child of its index
-              "tags": ["latest", "v1.2.3"]               // extra tags; run-<run id>-<run attempt> is automatic
+              "tags": ["latest", "v1.2.3"],              // extra tags; run-<run id>-<run attempt> is automatic
+              "idx-identity": [                          // optional: the index tagged idx-<sha256> of these of
+                "org.opencontainers.image.revision",     // its annotations, lines key=value sorted, joined by \n
+                "com.opendaq.dependencies.core.revision"
+              ],
+              "pkg-identity": [                          // optional: each package tagged pkg-<sha256> of these
+                "org.opencontainers.image.revision",     // of its own annotations, alike
+                "com.opendaq.dependencies.core.revision",
+                "com.opendaq.package.triplet"
+              ]
             },
             {                                            // one entry per kind: a tarball and a .deb are
               "path": "ghcr.io/<org>/path/to/package",   // variants of nothing, so they never share
@@ -43,6 +52,10 @@ on:
           ]
         type: string
         required: true
+      revision:
+        description: "The commit the stagings were built from, in full, e.g. 'a82fa899b78e23ddcf61975eb9255b22e713808' (empty: the run's own, github.sha)"
+        type: string
+        default: ''
 
 jobs:
   push:
@@ -65,13 +78,13 @@ jobs:
           STAGINGS: ${{ inputs.staging-packages }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ inputs.revision || github.sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
         run: |
-          import json, os, glob, subprocess, sys
+          import json, os, glob, hashlib, subprocess, sys
           from datetime import datetime, timezone
 
           PACKAGE_TYPE = "application/vnd.opendaq.package.v1"
@@ -109,6 +122,12 @@ jobs:
               if run.returncode != 0:
                   sys.exit(f"::error::oras {args[0]} failed")
               return run.stdout
+
+          def identity(prefix, annotations, keys, of):
+              """<prefix>-<sha256> of the annotations named, lines key=value sorted and joined by \\n; each must be there."""
+              if missing := [key for key in keys if key not in annotations]:
+                  sys.exit(f"::error::{of} has no {missing} of its identity")
+              return f"{prefix}-" + hashlib.sha256("\n".join(sorted(f"{key}={annotations[key]}" for key in keys)).encode()).hexdigest()
 
           def flatten(meta, prefix="com.opendaq"):
               """staging-meta.json as annotations: nested keys joined by dots, empty values left out."""
@@ -177,15 +196,22 @@ jobs:
                                        "org.opencontainers.image.revision":    sha,
                                        "org.opencontainers.image.source":      source,
                                        **deps[0]}
+              if staging.get("idx-identity"):
+                  tags.append(identity("idx", index["annotations"], staging["idx-identity"], f"the index of {base}"))
               json.dump(index, open("index.json", "w"), separators=(",", ":"))
               oras("manifest", "push", "--oci-layout", f"{layout}:index", "index.json",
                    "--media-type", "application/vnd.oci.image.index.v1+json")
 
-              # one copy publishes the index with its packages; the packages land untagged
+              # one copy publishes the index with its packages; the packages land untagged, but for their identity
               oras("cp", "--from-oci-layout", f"{layout}:index", f"{base}:{','.join(tags)}")
+              pkg_tags = {digest: identity("pkg", ann, staging["pkg-identity"], ann["org.opencontainers.image.title"])
+                          for digest, ann in packages.items()} if staging.get("pkg-identity") else {}
+              for digest, tag in pkg_tags.items():
+                  oras("tag", f"{base}@{digest}", tag)
 
               summary += [f"- `{base}`: {', '.join(f'`{t}`' for t in tags)}",
-                          *[f"  - `{ann['org.opencontainers.image.title']}`" for ann in packages.values()]]
+                          *[f"  - `{ann['org.opencontainers.image.title']}`" + (f" `{pkg_tags[digest]}`" if digest in pkg_tags else "")
+                            for digest, ann in packages.items()]]
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("\n".join(summary) + "\n")

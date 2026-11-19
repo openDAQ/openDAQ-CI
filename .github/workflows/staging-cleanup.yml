@@ -7,11 +7,16 @@ name: Staging Cleanup
 #   Prune (ghcr) -- ghcr-specific: ghcr has no OCI manifest delete, so resolve each digest to its
 #                   GitHub Packages version and DELETE it over REST. Skipped on a dry run.
 #
+# An index past its retention is kept when it is a release: its org.opencontainers.image.revision is
+# a release commit of this repository (github.repository), and, if it has one, its
+# com.opendaq.dependencies.opendaq.revision a release commit of the core (<owner>/openDAQ). A release
+# commit is one a tag vX.Y.Z points at, lying on release/X.Y. A module of a release branch built
+# against a core that is not released is pruned.
+#
 # Removal always goes through the index: children by digest, then the index itself. NEVER "delete
-# untagged versions" -- live children are untagged too. Adding another registry means keeping Find
-# EOL and adding a Prune (<registry>) that consumes the same digests; the up-front guard admits only
-# ghcr today (its only Prune). Point this at paths a repo owns (a nightly channel); a release
-# channel is simply a path you never clean.
+# untagged versions" -- children without pkg- tags are untagged. Adding another registry means
+# keeping Find EOL and adding a Prune (<registry>) that consumes the same digests; the up-front
+# guard admits only ghcr today (its only Prune). Point this at paths the calling repo owns.
 on:
   workflow_call:
     inputs:
@@ -25,8 +30,8 @@ on:
             }
           ]
           retention is days + hours + minutes + seconds summed; an index older than that is
-          pruned. A zero window prunes nothing (the entry is skipped) -- retention 0 is never
-          "delete all".
+          pruned, unless it is a release (see the header). A zero window prunes nothing (the
+          entry is skipped) -- retention 0 is never "delete all".
         type: string
         required: true
       dry-run:
@@ -72,8 +77,11 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
           TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CORE: ${{ github.repository_owner }}/openDAQ
         run: |
-          import json, os, subprocess, sys
+          import json, os, re, subprocess, sys
           from datetime import datetime, timezone, timedelta
 
           retentions = json.loads(os.environ["RETENTIONS"])
@@ -87,6 +95,27 @@ jobs:
               if r.returncode != 0:
                   sys.exit(f"::error::{err}: {r.stderr.strip()}")
               return r.stdout
+
+          def gh(*args):
+              """gh api's answer; an error but a 404 (no such branch) fails the step: a release is never pruned for it."""
+              r = subprocess.run(["gh", "api", *args], text=True, capture_output=True)
+              if r.returncode != 0 and "HTTP 404" not in r.stderr:
+                  sys.exit(f"::error::gh api {args[0]} failed: {r.stderr.strip()}")
+              return r.stdout
+
+          tags = {}   # repository -> {commit: [tag]}
+          def release(repository, commit):
+              """The tag vX.Y.Z of the commit, the commit lying on release/X.Y; else None."""
+              if repository not in tags:
+                  tags[repository] = {}
+                  for line in gh(f"repos/{repository}/tags", "--paginate", "-q", '.[] | .commit.sha + " " + .name').splitlines():
+                      sha, name = line.split()
+                      tags[repository].setdefault(sha, []).append(name)
+              for name in tags[repository].get(commit, []):
+                  if m := re.fullmatch(r"v(\d+)\.(\d+)\.\d+", name):
+                      if gh(f"repos/{repository}/compare/release%2F{m[1]}.{m[2]}...{commit}", "-q", ".status").strip() in ("identical", "behind"):
+                          return name
+              return None
 
           # login to every registry the paths reference so oras can enumerate tags and read manifests
           for host in sorted({t["path"].rstrip("/").lower().split("/")[0] for t in retentions}):
@@ -103,10 +132,20 @@ jobs:
                   continue
               cutoff = now - window
 
-              # every index is tagged (by its run) and tags/list is OCI's only enumeration; two
-              # tags share one index digest, so resolve each tag and collapse to unique digests
+              # every index is tagged by its run, run-<id>-<attempt>, and tags/list is OCI's only enumeration;
+              # the other tags (idx-, pkg-, latest) name the same indexes or their packages, so only run tags are
+              # resolved, each to its index
+              # a path nothing was published to yet has no tags to list
+              listing = subprocess.run(["oras", "repo", "tags", path], text=True, capture_output=True)
+              if listing.returncode != 0:
+                  if "name unknown" in listing.stderr:
+                      print(f"{path}: not in the registry, nothing to prune")
+                      continue
+                  sys.exit(f"::error::listing tags for {path} failed: {listing.stderr.strip()}")
               digests = {}
-              for tag in oras(["repo", "tags", path], f"listing tags for {path} failed").split():
+              for tag in listing.stdout.split():
+                  if not tag.startswith("run-"):
+                      continue
                   desc = oras(["manifest", "fetch", "--descriptor", f"{path}:{tag}"], f"resolving {tag} failed")
                   digests.setdefault(json.loads(desc)["digest"], None)
 
@@ -119,8 +158,20 @@ jobs:
                       continue
                   created = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
                   children[digest] = [m["digest"] for m in index.get("manifests", [])]
-                  if created < cutoff:
-                      stale[digest] = (now - created).days
+                  if created >= cutoff:
+                      continue
+
+                  # a release is kept: its commit, and the core's it is built against, if any
+                  annotations = index.get("annotations", {})
+                  revisions = [("org.opencontainers.image.revision", os.environ["REPOSITORY"])]
+                  if "com.opendaq.dependencies.opendaq.revision" in annotations:
+                      revisions.append(("com.opendaq.dependencies.opendaq.revision", os.environ["CORE"]))
+                  releases = [release(repository, annotations.get(key, "")) for key, repository in revisions]
+                  age = (now - created).days
+                  if all(releases):
+                      print(f"keep {path}@{digest} (age {age}d): {', '.join(releases)}")
+                      continue
+                  stale[digest] = age
 
               # a child goes with the index that lists it, and an index that stays keeps its own:
               # deleting a child two indexes share would leave the live one pointing at nothing
