@@ -45,13 +45,14 @@ permissions:
 jobs:
   # The commits, and the three stagings in this run as <staging>-staging-<job>; MQTT and ASAM-CMP are left out, the
   # tests load neither. A ref, here and below, cannot come from an expression: these are development branches until
-  # the release, which tags them
+  # the release, which tags them. bundle/integration-tests is jira/TBBAS-3611-bundle-from-stagings-and-sources with
+  # OpcUaModules staged by its bundle/stagings-no-werror recipe, for a core with ISyncComponent deprecated
   resolve:
     name: Resolve
     permissions:
       contents: read
       packages: write     # asked for by resolve.yml's stage jobs, whose push never runs from here
-    uses: openDAQ/openDAQ-bundle/.github/workflows/resolve.yml@jira/TBBAS-3611-bundle-from-stagings-and-sources
+    uses: openDAQ/openDAQ-bundle/.github/workflows/resolve.yml@bundle/integration-tests
     with:
       opendaq: ${{ inputs.opendaq }}
       opcua-modules: ${{ inputs.opcua-modules }}

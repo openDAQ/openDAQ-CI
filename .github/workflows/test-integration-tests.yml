@@ -5,9 +5,11 @@ name: Test Integration Tests CI
 # workflow_call as its only trigger, so its callers all run it alike; triggers, the default commits and concurrency
 # are this wrapper's.
 #
-# The default commits are the heads of the layers' bundle/stagings branches on 2026-11-19, whose stage recipes build
-# the core with its test utilities: core caa3d8c, OpcUaModules 34f28ea, LTStreamingModulesModern fdad19a. Once
-# bundle.json pins a core that meets the tests' requirements, they go: the inputs left empty are bundle.json's own.
+# The default commits: core main e682217, the first with #1389, which the tests need; OpcUaModules 34f28ea and
+# LTStreamingModulesModern fdad19a, the heads of their bundle/stagings branches on 2026-11-19. Core main's own stage
+# preset still leaves the test utilities and native streaming out, and no core installs config_protocol yet, so the
+# test build stops at configure until core stages them. Once bundle.json pins a core that meets the tests'
+# requirements, the defaults go: the inputs left empty are bundle.json's own.
 #
 # GitHub offers "Run workflow" for a workflow on the default branch; on another branch, once its pull request has run
 # it, by the API: gh workflow run test-integration-tests.yml --ref <branch> -f opendaq=<commit>
@@ -19,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       opendaq:
-        description: "openDAQ: a commit, branch or tag (empty: core bundle/stagings caa3d8c)"
+        description: "openDAQ: a commit, branch or tag (empty: core main e682217)"
         type: string
         default: ''
       opcua-modules:
@@ -46,6 +48,6 @@ jobs:
       packages: write     # integration-tests.yml asks for it: its resolve job stages what ghcr lacks, never pushes
     uses: ./.github/workflows/integration-tests.yml
     with:
-      opendaq: ${{ inputs.opendaq || 'caa3d8c6ea433da59dd8bc83e3c01adcf3fd688e' }}
+      opendaq: ${{ inputs.opendaq || 'e6822176bc62113606808d6fa2c567c4dc6fd773' }}
       opcua-modules: ${{ inputs.opcua-modules || '34f28eaa917862fa99c5abce9f92b584c19ec7d0' }}
       lt-streaming-modules: ${{ inputs.lt-streaming-modules || 'fdad19ab14449a9f1924b9ed7499b3c0f0fd7667' }}
