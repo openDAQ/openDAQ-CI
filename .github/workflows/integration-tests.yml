@@ -1,0 +1,454 @@
+name: Integration Tests
+
+# Runs openDAQ's integration tests against one combination of the core and the modules the tests load: each one the
+# head of its main branch, unless the caller names another commit. This workflow stages the three in this run, for the
+# platform of the test job only, with this repository's reusable.yml, or takes them from a run of openDAQ-bundle
+# (bundle-run). Integration-tests' integration-tests-prebuilt.yml builds its test apps against them and runs them:
+#
+#   caller (a core or module repository)
+#    └─ integration-tests.yml
+#         ├─ revisions                    the commits, in full, and the platform
+#         ├─ stage-opendaq                → opendaq-staging-<job>
+#         ├─ stage-opcua-modules          against it → opcua-modules-staging-<job>
+#         ├─ stage-lt-streaming-modules   against it → lt-streaming-modules-staging-<job>
+#         ├─ bundle                       or, with bundle-run, that run's three, uploaded again to this run
+#         ├─ test                         Integration-tests' prebuilt test job, on the stagings of this run
+#         └─ result                       the caller's one check, and a summary
+#
+# The stagings are built as the layers' own stage.yml build them, with what the tests need on top: core's stage preset
+# leaves the test utilities, native streaming and the reference modules out on main, and the modules build with
+# warnings as errors, which a core with ISyncComponent deprecated (openDAQ#1045) breaks for OpcUaModules on gcc: both
+# build without, so that a core's new warnings do not stop them. Nothing is pulled from or pushed to ghcr;
+# openDAQ-bundle's resolve.yml, which reuses published stagings, takes over once the layers' own recipes stage what
+# the tests need.
+#
+# With bundle-run nothing is staged here. That run has to hold the three stagings of the test job's platform, the
+# modules built against its core, each with what the tests need: a run of the layers' current recipes stages core
+# without the test utilities and OpcUaModules with warnings as errors. Its artifacts are downloaded with the secret
+# bundle-token, or with the caller's GITHUB_TOKEN when none is given; openDAQ-bundle keeps them for 7 days.
+#
+# A caller grants "contents: read" and "packages: read" (the test job's pull, which run mode skips, asks for it; GitHub
+# checks it when the run starts). It calls this workflow once per run, from a run that uploads no <staging>-staging-*
+# or integration-tests-* artifacts of its own, e.g. from a workflow file of its own. Concurrency and run-name are the
+# caller's.
+on:
+  workflow_call:
+    inputs:
+      opendaq:
+        description: "openDAQ: a commit (in full), branch or tag (empty: main; with bundle-run: its staging's)"
+        type: string
+        default: ''
+      opcua-modules:
+        description: "OpcUaModules: a commit (in full), branch or tag (empty: main; with bundle-run: its staging's)"
+        type: string
+        default: ''
+      lt-streaming-modules:
+        description: >-
+          LTStreamingModulesModern: a commit (in full), branch or tag (empty: main; with bundle-run: its staging's)
+        type: string
+        default: ''
+      bundle-run:
+        description: "The ID of an openDAQ-bundle run whose stagings are tested (empty: they are staged in this run)"
+        type: string
+        default: ''
+    secrets:
+      bundle-token:
+        description: "For bundle-run: a token that can download openDAQ-bundle's artifacts (empty: GITHUB_TOKEN)"
+        required: false
+    outputs:
+      revisions:
+        description: "The commits tested: a JSON object, staging → full sha"
+        value: ${{ jobs.bundle.outputs.revisions || jobs.revisions.outputs.revisions }}
+      matrix:
+        description: "The test jobs, openDAQ-CI's matrix, with the name of each one's test results artifact"
+        value: ${{ jobs.test.outputs.matrix }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The commits in full, as the stagings name them, and the one platform: the build job of the test job (its BUILD_JOB).
+  # With bundle-run, a commit left empty stays empty: the bundle job takes it from the run's stagings
+  revisions:
+    name: Revisions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      revisions: ${{ steps.revisions.outputs.revisions }}
+      opendaq: ${{ steps.revisions.outputs.opendaq }}
+      opcua-modules: ${{ steps.revisions.outputs.opcua-modules }}
+      lt-streaming-modules: ${{ steps.revisions.outputs.lt-streaming-modules }}
+      job: ${{ steps.revisions.outputs.job }}
+      include-jobs: ${{ steps.revisions.outputs.include-jobs }}
+      bundle-run: ${{ steps.revisions.outputs.bundle-run }}
+    steps:
+      - name: Resolve the commits
+        id: revisions
+        shell: python3 {0}
+        env:
+          INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          import json, os, re, subprocess, sys
+
+          # the test job builds on this one job of reusable.yml's catalog; the stagings have to be of the same
+          JOB = "ubuntu-22.04-x86_64-ninja-gcc-release"
+          REPOSITORIES = {"opendaq": "openDAQ", "opcua-modules": "OpcUaModules",
+                          "lt-streaming-modules": "LTStreamingModulesModern"}
+
+          inputs = json.loads(os.environ["INPUTS"] or "{}") or {}
+          bundle_run = (inputs.get("bundle-run") or "").strip()
+          if bundle_run and not re.fullmatch(r"[0-9]+", bundle_run):
+              sys.exit(f"::error::bundle-run {bundle_run!r} is not the ID of a run")
+
+          def commit(staging, ref):
+              """A full sha as it is; a branch or a tag → its commit, as the repository has it now."""
+              if re.fullmatch(r"[0-9a-f]{40}", ref):
+                  return ref
+              url = f"https://github.com/openDAQ/{REPOSITORIES[staging]}.git"
+              out = subprocess.run(["git", "ls-remote", url, ref], capture_output=True, text=True, check=True).stdout
+              refs = dict(reversed(line.split("\t")) for line in out.splitlines())
+              for name in (f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}", f"refs/heads/{ref}"):
+                  if name in refs:
+                      return refs[name]
+              sys.exit(f"::error::{REPOSITORIES[staging]} has no branch or tag {ref!r} (a commit is given in full)")
+
+          revisions = {}
+          for staging in REPOSITORIES:
+              ref = (inputs.get(staging) or "").strip()
+              revisions[staging] = commit(staging, ref or "main") if ref or not bundle_run else ""
+
+          summary = ["| Staging | Commit |", "|-|-|"]
+          for staging, sha in revisions.items():
+              commit = (f"[`{sha[:12]}`](https://github.com/openDAQ/{REPOSITORIES[staging]}/commit/{sha})" if sha
+                        else f"its staging's in openDAQ-bundle run {bundle_run}")
+              summary.append(f"| {staging} | {commit} |")
+          print("\n".join(summary))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(summary) + "\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"revisions={json.dumps(revisions)}\n")
+              for staging, sha in revisions.items():
+                  f.write(f"{staging}={sha}\n")
+              f.write(f"job={JOB}\n")
+              f.write(f"include-jobs={json.dumps([JOB])}\n")
+              f.write(f"bundle-run={bundle_run}\n")
+
+  # As core's stage.yml stages it, with the test utilities, native streaming and the modules of core's bundle/stagings
+  # preset on: the tests load the native streaming and reference modules from this staging, and link the test
+  # utilities. The C bindings stay off: the tests use none
+  stage-opendaq:
+    name: Stage openDAQ
+    needs: revisions
+    if: needs.revisions.outputs.bundle-run == ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable.yml
+    with:
+      repository: openDAQ/openDAQ
+      ref: ${{ needs.revisions.outputs.opendaq }}
+      include-jobs: ${{ needs.revisions.outputs.include-jobs }}
+      upload-pattern: opendaq-*
+      timeout: '[{"timeout-minutes": 180}]'
+      cmake-presets: >-
+        [
+          {
+            "configure-preset": "stage",
+            "cache-variables": {
+              "OPENDAQ_ENABLE_TEST_UTILS": true,
+              "OPENDAQ_ENABLE_NATIVE_STREAMING": true,
+              "DAQMODULES_OPENDAQ_CLIENT_MODULE": true,
+              "DAQMODULES_OPENDAQ_SERVER_MODULE": true,
+              "DAQMODULES_AUDIO_DEVICE_MODULE": true,
+              "DAQMODULES_REF_DEVICE_MODULE": true,
+              "DAQMODULES_SIMULATOR_DEVICE_MODULE": true,
+              "DAQMODULES_REF_FB_MODULE": true,
+              "DAQMODULES_BASIC_CSV_RECORDER_MODULE": true
+            }
+          }
+        ]
+      packages: >-
+        [
+          {
+            "match-jobs": ["ubuntu-*"],
+            "apt-install": ["libx11-dev", "libxi-dev", "libxcursor-dev", "libxrandr-dev", "libgl-dev", "libudev-dev", "libfreetype6-dev"]
+          }
+        ]
+      cpack-presets: '[{"stagings": [{"name": "core"}]}]'
+
+  # As OpcUaModules' stage.yml stages it, against the core of this run, without warnings as errors
+  stage-opcua-modules:
+    name: Stage OpcUaModules
+    needs: [revisions, stage-opendaq]
+    if: needs.revisions.outputs.bundle-run == ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable.yml
+    with:
+      repository: openDAQ/OpcUaModules
+      ref: ${{ needs.revisions.outputs.opcua-modules }}
+      include-jobs: ${{ needs.revisions.outputs.include-jobs }}
+      upload-pattern: opcua-modules-*
+      timeout: '[{"timeout-minutes": 180}]'
+      packages: >-
+        [
+          {
+            "artifacts": [{"name": "opendaq-staging-${{ needs.revisions.outputs.job }}", "dir": "staging-deps"}]
+          }
+        ]
+      cmake-presets: >-
+        [
+          {
+            "configure-preset": "stage",
+            "cache-variables": {
+              "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps;${sourceDir}/staging-deps/opt/opendaq",
+              "CPACK_OPENDAQ_META_FIELDS": "dependencies/opendaq/revision=${{ needs.revisions.outputs.opendaq }}",
+              "DAQMODULES_OPCUA_RELEASE_WARNINGS_AS_ERRORS": false
+            }
+          }
+        ]
+      cpack-presets: '[{"stagings": [{"name": "opcua"}]}]'
+
+  # As LTStreamingModulesModern's stage.yml stages it, against the core of this run, without warnings as errors
+  stage-lt-streaming-modules:
+    name: Stage LTStreamingModulesModern
+    needs: [revisions, stage-opendaq]
+    if: needs.revisions.outputs.bundle-run == ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable.yml
+    with:
+      repository: openDAQ/LTStreamingModulesModern
+      ref: ${{ needs.revisions.outputs.lt-streaming-modules }}
+      include-jobs: ${{ needs.revisions.outputs.include-jobs }}
+      upload-pattern: lt-streaming-modules-*
+      timeout: '[{"timeout-minutes": 180}]'
+      packages: >-
+        [
+          {
+            "artifacts": [{"name": "opendaq-staging-${{ needs.revisions.outputs.job }}", "dir": "staging-deps"}]
+          },
+          {
+            "match-jobs": ["ubuntu-*"],
+            "apt-install": ["libssl-dev"]
+          }
+        ]
+      cmake-presets: >-
+        [
+          {
+            "configure-preset": "stage",
+            "cache-variables": {
+              "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps;${sourceDir}/staging-deps/opt/opendaq",
+              "CPACK_OPENDAQ_META_FIELDS": "dependencies/opendaq/revision=${{ needs.revisions.outputs.opendaq }}",
+              "DAQMODULES_LT_STREAMING_RELEASE_WARNINGS_AS_ERRORS": false
+            }
+          }
+        ]
+      cpack-presets: '[{"stagings": [{"name": "lt-streaming"}]}]'
+
+  # With bundle-run, instead of the three stage jobs: that run's stagings of the platform, uploaded again to this run
+  # under the same names, each artifact as it was (<staging>/ with the tarball and its staging-meta.json). A commit left
+  # empty is taken from them as the test job's check takes it: the core's from the modules'
+  # dependencies.opendaq.revision, a module's by looking up the digits of its version suffix in its repository. The
+  # test job checks them all again, with the triplet and the core the modules are built against
+  bundle:
+    name: Stagings of the bundle run
+    needs: revisions
+    if: needs.revisions.outputs.bundle-run != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      revisions: ${{ steps.commits.outputs.revisions }}
+      opendaq: ${{ steps.commits.outputs.opendaq }}
+      opcua-modules: ${{ steps.commits.outputs.opcua-modules }}
+      lt-streaming-modules: ${{ steps.commits.outputs.lt-streaming-modules }}
+    steps:
+      # Each artifact into its own folder stagings/<artifact>
+      - name: Download the stagings
+        uses: actions/download-artifact@v7
+        with:
+          repository: openDAQ/openDAQ-bundle
+          run-id: ${{ needs.revisions.outputs.bundle-run }}
+          github-token: ${{ secrets.bundle-token || github.token }}
+          pattern: '{opendaq,opcua-modules,lt-streaming-modules}-staging-${{ needs.revisions.outputs.job }}'
+          path: stagings
+
+      - name: Take the commits
+        id: commits
+        shell: python3 {0}
+        env:
+          GIVEN: ${{ needs.revisions.outputs.revisions }}
+          JOB: ${{ needs.revisions.outputs.job }}
+          BUNDLE_RUN: ${{ needs.revisions.outputs.bundle-run }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          import json, os, pathlib, re, sys, urllib.request
+
+          REPOSITORIES = {"opendaq": "openDAQ", "opcua-modules": "OpcUaModules",
+                          "lt-streaming-modules": "LTStreamingModulesModern"}
+          MODULES = [staging for staging in REPOSITORIES if staging != "opendaq"]
+          given, job, run = json.loads(os.environ["GIVEN"]), os.environ["JOB"], os.environ["BUNDLE_RUN"]
+
+          def fail(message):
+              sys.exit(f"::error title=openDAQ-bundle run {run}::{message}")
+
+          metas = {}
+          for staging in REPOSITORIES:
+              artifact = pathlib.Path("stagings", f"{staging}-staging-{job}")
+              if not artifact.is_dir():
+                  fail(f"no artifact {artifact.name}: the run did not stage it, or its artifacts have expired")
+              found = sorted(artifact.rglob("staging-meta.json"))
+              if len(found) != 1:
+                  fail(f"{len(found)} staging-meta.json files in {artifact.name} instead of one")
+              metas[staging] = json.loads(found[0].read_text(encoding="utf-8"))
+
+          def package(staging):
+              return metas[staging].get("package") or {}
+
+          def look_up(staging):
+              """A module's commit, from the digits of its version suffix ("-8253516"), in its repository"""
+              suffix = package(staging).get("version.suffix", "")
+              match = re.fullmatch(r"-([0-9a-f]{7,40})", suffix)
+              if not match:
+                  fail(f"{staging}: the version suffix {suffix!r} does not name a commit")
+              url = f"https://api.github.com/repos/openDAQ/{REPOSITORIES[staging]}/commits/{match.group(1)}"
+              request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+              if os.environ.get("GITHUB_TOKEN"):
+                  request.add_header("Authorization", f"Bearer {os.environ['GITHUB_TOKEN']}")
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)["sha"]
+              except (OSError, ValueError, KeyError) as e:
+                  fail(f"{staging}: commit {match.group(1)} cannot be looked up: {e}")
+
+          def built_against_core(staging):
+              return ((metas[staging].get("dependencies") or {}).get("opendaq") or {}).get("revision") or ""
+
+          built_against = {module: built_against_core(module) for module in MODULES}
+          core = given.get("opendaq") or ""
+          if not core:
+              cores = set(built_against.values())
+              if len(cores) != 1 or not re.fullmatch(r"[0-9a-f]{40}", next(iter(cores))):
+                  fail("the core's commit cannot be taken from the module stagings, built against "
+                       + ", ".join(f"{module} {sha or 'none'}" for module, sha in built_against.items()))
+              core = cores.pop()
+          revisions = {"opendaq": core}
+          revisions.update({module: given.get(module) or look_up(module) for module in MODULES})
+
+          summary = [f"Stagings of [openDAQ-bundle run {run}]"
+                     f"(https://github.com/openDAQ/openDAQ-bundle/actions/runs/{run})", "",
+                     "| Staging | Package | Commit | Built against |", "|-|-|-|-|"]
+          for staging, sha in revisions.items():
+              p = package(staging)
+              name = f"{p.get('name')} {p.get('version')}{p.get('version.suffix', '')} ({p.get('triplet')})"
+              commit = f"[`{sha[:12]}`](https://github.com/openDAQ/{REPOSITORIES[staging]}/commit/{sha})"
+              summary.append(f"| {staging} | {name} | {commit} | {built_against.get(staging, '')[:12]} |")
+          print("\n".join(summary))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(summary) + "\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"revisions={json.dumps(revisions)}\n")
+              for staging, sha in revisions.items():
+                  f.write(f"{staging}={sha}\n")
+
+      - name: Upload the core staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: opendaq-staging-${{ needs.revisions.outputs.job }}
+          path: stagings/opendaq-staging-${{ needs.revisions.outputs.job }}
+          if-no-files-found: error
+
+      - name: Upload the OpcUaModules staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: opcua-modules-staging-${{ needs.revisions.outputs.job }}
+          path: stagings/opcua-modules-staging-${{ needs.revisions.outputs.job }}
+          if-no-files-found: error
+
+      - name: Upload the LTStreamingModulesModern staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: lt-streaming-modules-staging-${{ needs.revisions.outputs.job }}
+          path: stagings/lt-streaming-modules-staging-${{ needs.revisions.outputs.job }}
+          if-no-files-found: error
+
+  # The commits are given so that the test job checks the run holds the stagings of exactly these. A ref cannot come
+  # from an expression: a development branch until the release, which tags it. It runs on the stagings of the three
+  # stage jobs or of the bundle job, whichever ran
+  test:
+    name: Test
+    needs: [revisions, stage-opendaq, stage-opcua-modules, stage-lt-streaming-modules, bundle]
+    if: >-
+      ${{ !cancelled() && needs.revisions.result == 'success'
+      && (needs.bundle.result == 'success'
+      || (needs.stage-opendaq.result == 'success' && needs.stage-opcua-modules.result == 'success'
+      && needs.stage-lt-streaming-modules.result == 'success')) }}
+    permissions:
+      contents: read
+      packages: read      # asked for by the test job's pull, which run mode skips
+    uses: openDAQ/Integration-tests/.github/workflows/integration-tests-prebuilt.yml@Prebuild-stagings
+    with:
+      staging-source: run
+      opendaq-revision: ${{ needs.bundle.outputs.opendaq || needs.revisions.outputs.opendaq }}
+      opcua-modules-revision: ${{ needs.bundle.outputs.opcua-modules || needs.revisions.outputs.opcua-modules }}
+      lt-streaming-modules-revision: >-
+        ${{ needs.bundle.outputs.lt-streaming-modules || needs.revisions.outputs.lt-streaming-modules }}
+
+  # One check for the caller to require, whichever of the jobs above failed or was skipped
+  result:
+    name: Result
+    needs: [revisions, stage-opendaq, stage-opcua-modules, stage-lt-streaming-modules, bundle, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize
+        shell: python3 {0}
+        env:
+          REVISIONS: ${{ needs.bundle.outputs.revisions || needs.revisions.outputs.revisions }}
+          BUNDLE_RUN: ${{ needs.revisions.outputs.bundle-run }}
+          RESULTS: >-
+            {"revisions": "${{ needs.revisions.result }}",
+             "opendaq": "${{ needs.stage-opendaq.result }}",
+             "opcua-modules": "${{ needs.stage-opcua-modules.result }}",
+             "lt-streaming-modules": "${{ needs.stage-lt-streaming-modules.result }}",
+             "bundle": "${{ needs.bundle.result }}",
+             "test": "${{ needs.test.result }}"}
+          CALLER: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
+        run: |
+          import json, os, sys
+
+          repositories = {"opendaq": "openDAQ", "opcua-modules": "OpcUaModules",
+                          "lt-streaming-modules": "LTStreamingModulesModern"}
+          revisions = json.loads(os.environ["REVISIONS"] or "{}")
+          bundle_run = os.environ["BUNDLE_RUN"]
+          results = json.loads(os.environ["RESULTS"])
+          caller, caller_sha = os.environ["CALLER"], os.environ["CALLER_SHA"]
+          # the jobs that have to succeed: the bundle job, or the three stage jobs, between revisions and test
+          needed = ["revisions"] + (["bundle"] if bundle_run else list(repositories)) + ["test"]
+
+          summary = ["### Integration tests", "",
+                     f"Called from [`{caller}`](https://github.com/{caller}) at "
+                     f"[`{caller_sha[:12]}`](https://github.com/{caller}/commit/{caller_sha})", ""]
+          if bundle_run:
+              summary += [f"Stagings of [openDAQ-bundle run {bundle_run}]"
+                          f"(https://github.com/openDAQ/openDAQ-bundle/actions/runs/{bundle_run}): "
+                          f"{results['bundle']}", ""]
+          if revisions:
+              summary += ["| Staging | Commit |" + ("" if bundle_run else " Stage |"),
+                          "|-|-|" + ("" if bundle_run else "-|")]
+              for staging, sha in revisions.items():
+                  repository = repositories.get(staging, staging)
+                  commit = f"[`{sha[:12]}`](https://github.com/openDAQ/{repository}/commit/{sha})" if sha else "-"
+                  summary.append(f"| {staging} | {commit} |" + ("" if bundle_run else f" {results.get(staging, '')} |"))
+          else:
+              summary += [f"The commits were not resolved: {results['revisions']}."]
+          summary += ["", f"Test: **{results['test']}**"]
+          print("\n".join(summary))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(summary) + "\n")
+
+          if failed := {job: results[job] for job in needed if results[job] != "success"}:
+              sys.exit(f"::error title=Integration tests::{', '.join(f'{job} {result}' for job, result in failed.items())}")
