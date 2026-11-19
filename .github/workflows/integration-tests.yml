@@ -16,10 +16,11 @@ name: Integration Tests
 #         └─ result                       the caller's one check, and a summary
 #
 # The stagings are built as the layers' own stage.yml build them, with what the tests need on top: core's stage preset
-# leaves the test utilities, native streaming and the reference modules out on main, and OpcUaModules builds with
-# warnings as errors, which a core with ISyncComponent deprecated (openDAQ#1045) breaks on gcc. Nothing is pulled from
-# or pushed to ghcr; openDAQ-bundle's resolve.yml, which reuses published stagings, takes over once the layers' own
-# recipes stage what the tests need.
+# leaves the test utilities, native streaming and the reference modules out on main, and the modules build with
+# warnings as errors, which a core with ISyncComponent deprecated (openDAQ#1045) breaks for OpcUaModules on gcc: both
+# build without, so that a core's new warnings do not stop them. Nothing is pulled from or pushed to ghcr;
+# openDAQ-bundle's resolve.yml, which reuses published stagings, takes over once the layers' own recipes stage what
+# the tests need.
 #
 # With bundle-run nothing is staged here. That run has to hold the three stagings of the test job's platform, the
 # modules built against its core, each with what the tests need: a run of the layers' current recipes stages core
@@ -208,7 +209,7 @@ jobs:
         ]
       cpack-presets: '[{"stagings": [{"name": "opcua"}]}]'
 
-  # As LTStreamingModulesModern's stage.yml stages it, against the core of this run
+  # As LTStreamingModulesModern's stage.yml stages it, against the core of this run, without warnings as errors
   stage-lt-streaming-modules:
     name: Stage LTStreamingModulesModern
     needs: [revisions, stage-opendaq]
@@ -238,7 +239,8 @@ jobs:
             "configure-preset": "stage",
             "cache-variables": {
               "CMAKE_PREFIX_PATH": "${sourceDir}/staging-deps;${sourceDir}/staging-deps/opt/opendaq",
-              "CPACK_OPENDAQ_META_FIELDS": "dependencies/opendaq/revision=${{ needs.revisions.outputs.opendaq }}"
+              "CPACK_OPENDAQ_META_FIELDS": "dependencies/opendaq/revision=${{ needs.revisions.outputs.opendaq }}",
+              "DAQMODULES_LT_STREAMING_RELEASE_WARNINGS_AS_ERRORS": false
             }
           }
         ]
