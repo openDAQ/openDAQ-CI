@@ -98,6 +98,7 @@ jobs:
               "package-managers": [],
               "generator": None,
               "toolset": None,
+              "msvc-toolset": None,
               "target-arch": None,
               "cc": None,
               "cxx": None,
@@ -112,7 +113,7 @@ jobs:
               "fmt-yum-install": "{sudo} {envs} yum install -y {pkgs}",
               "fmt-pip-install": "python{ver}{arch} -m pip install {pkgs}",
               "fmt-brew-install": "{envs} brew install {pkgs}",
-              "fmt-choco-install": "{envs} choco install -y {pkgs}",
+              "fmt-choco-install": "{envs} choco upgrade -y {pkgs}",
               "fmt-winget-install": "{envs} winget install --accept-source-agreements --accept-package-agreements --id {pkgs}",
               "fmt-vcpkg-install": "vcpkg install --triplet {triplet} {pkgs}",
               "apt-install-default": [],
@@ -246,7 +247,7 @@ jobs:
           _windows_2025_x86_64_msvs  = {**_windows_2022_x86_64, "runner": "windows-2025", "generator": "Visual Studio 18 2026"}
           _windows_2025_x86_64_ninja = {**_windows_2022_x86_64, "runner": "windows-2025", "generator": "Ninja"}
 
-          # the runner image's standalone LLVM, not the clang bundled with Visual Studio
+          # the runner image's standalone LLVM (20), not the clang bundled with Visual Studio; a job upgrades it, or builds against an older MSVC STL that accepts it
           _windows_llvm = "C:/Program Files/LLVM/bin/"
 
           # the generator drives the arm64 cross toolchain, so no msvc-dev-cmd environment;
@@ -297,7 +298,8 @@ jobs:
               "windows-2025-x86_64-msvs-v142-release":      {**_windows_2025_x86_64_msvs,   "toolset": "v142",                            "build-type": "Release" },
               "windows-2025-x86_64-msvs-v145-debug":        {**_windows_2025_x86_64_msvs,   "toolset": "v145",                            "build-type": "Debug" },
               "windows-2025-x86-msvs-v145-release":         {**_windows_2025_x86_64_msvs,   "toolset": "v145",                            "build-type": "Release",  "target-arch": "x86" },
-              "windows-2025-x86_64-ninja-clang-20-release": {**_windows_2025_x86_64_ninja,  "cc": _windows_llvm + "clang.exe", "cxx": _windows_llvm + "clang++.exe", "build-type": "Release" },
+              "windows-2025-x86_64-ninja-clang-20-release": {**_windows_2025_x86_64_ninja,  "cc": _windows_llvm + "clang.exe", "cxx": _windows_llvm + "clang++.exe", "build-type": "Release",  "msvc-toolset": "14.29" },
+              "windows-2025-x86_64-ninja-clang-22-release": {**_windows_2025_x86_64_ninja,  "cc": _windows_llvm + "clang.exe", "cxx": _windows_llvm + "clang++.exe", "build-type": "Release",  "choco-install": ["llvm --version=22.1.8"] },
 
               "ubuntu-20.04-x86-ninja-gcc-7-release":       {**_ubuntu_20_04_x86_ninja,     "cc": "gcc-7",      "cxx": "g++-7",           "build-type": "Release",  "apt-install": ["gcc-7", "g++-7", "gcc-7-multilib", "g++-7-multilib"] },
               "ubuntu-20.04-x86_64-ninja-clang-9-release":  {**_ubuntu_20_04_x86_64_ninja,  "cc": "clang-9",    "cxx": "clang++-9",       "build-type": "Release",  "apt-install": ["clang-9"] },
@@ -525,6 +527,7 @@ jobs:
                   "bootstrap": cfg.get("bootstrap") or "",
                   "generator": cfg["generator"],
                   "toolset": cfg.get("toolset") or "",
+                  "msvc-toolset": cfg.get("msvc-toolset") or "",
                   "target-arch": cfg.get("target-arch") or "",
                   "cc": cc,
                   "cxx": cxx,
@@ -848,6 +851,8 @@ jobs:
       - name: Setup MSVC toolchain
         if: matrix.setup-msvc-toolchain
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: ${{ matrix.msvc-toolset }}
 
       - name: Install Intel C/C++ compiler
         if: matrix.intel-cc-url
