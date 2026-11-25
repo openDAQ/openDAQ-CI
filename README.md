@@ -256,6 +256,7 @@ The pattern components and their values are listed in the platform naming table:
 | windows-2025 | x86_64 | msvs | v145 | debug |
 | windows-2025 | x86 | msvs | v145 | release |
 | windows-2025 | x86_64 | ninja | clang-20 | release |
+| windows-2025 | x86_64 | ninja | clang-22 | release |
 | ubuntu-20.04 | x86 | ninja | gcc-7 | release |
 | ubuntu-20.04 | x86_64 | ninja | clang-9 | release |
 | ubuntu-20.04 | armv8 | ninja | clang-9 | release |
@@ -323,7 +324,7 @@ sudo apt-get install -y <apt-packages>
 brew install <brew-packages>
 
 # Install packages: windows
-choco install -y <choco-packages>
+choco upgrade -y <choco-packages>
 winget install --id <winget-package> #; winget install --id <winget-another-package>; <etc>
 vcpkg install --triplet <triplet> <vcpkg-packages>  # archives restored from / saved to the actions cache
 
