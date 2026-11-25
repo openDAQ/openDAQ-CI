@@ -1,0 +1,81 @@
+name: Test Integration Tests CI
+
+# Calls integration-tests.yml as a core or module repository calls it: this repository's own entry point to the
+# integration tests, on a pull request that changes either workflow or by hand. The head workflow keeps
+# workflow_call as its only trigger, so its callers all run it alike; triggers, the default commits and concurrency
+# are this wrapper's.
+#
+# The default commits, fixed so that a run of this repository tests this repository, are ones the layers' own recipes
+# stage with what the tests need, as bundle.yml stages them: core main e65dd80, the first with the stage preset of
+# #1377 (the test utilities, native streaming and the reference modules on), after #1401, which starts devices in the
+# Operation mode; OpcUaModules 6aaa052, the head of its bundle/stagings, with c3a4673, which builds with warnings as
+# errors against such a core (its main 485710c does not); LTStreamingModulesModern e06da4c, its main.
+# integration-tests.yml itself takes the heads of the main branches for the inputs left empty.
+#
+# stagings picks where the stagings are staged: by openDAQ-bundle's bundle.yml (bundle, the default; every platform of
+# the bundle, 1 to 2.5 hours), or by integration-tests.yml's own stage jobs (head; the test job's platform only).
+#
+# By hand, bundle-run tests the stagings of that openDAQ-bundle run instead of staging them in this run. The default
+# commits are then left out: a commit left empty is taken from the run's stagings, one that is given has to match.
+# The run's artifacts are downloaded with this run's GITHUB_TOKEN, or with the secret OPENDAQ_BUNDLE_TOKEN (a token
+# that can read openDAQ-bundle's Actions artifacts) once that is set.
+#
+# GitHub offers "Run workflow" for a workflow on the default branch; on another branch, once its pull request has run
+# it, by the API: gh workflow run test-integration-tests.yml --ref <branch> -f opendaq=<commit> (or -f bundle-run=<id>)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/integration-tests.yml
+      - .github/workflows/test-integration-tests.yml
+  workflow_dispatch:
+    inputs:
+      opendaq:
+        description: "openDAQ: a commit, branch or tag (empty: core main e65dd80, or with bundle-run its staging's)"
+        type: string
+        default: ''
+      opcua-modules:
+        description: >-
+          OpcUaModules: a commit, branch or tag (empty: bundle/stagings 6aaa052, or with bundle-run its staging's)
+        type: string
+        default: ''
+      lt-streaming-modules:
+        description: >-
+          LTStreamingModulesModern: a commit, branch or tag (empty: main e06da4c, or with bundle-run its staging's)
+        type: string
+        default: ''
+      stagings:
+        description: "Staged by: bundle (openDAQ-bundle's bundle.yml) or head (integration-tests.yml's stage jobs)"
+        type: choice
+        options:
+          - bundle
+          - head
+        default: bundle
+      bundle-run:
+        description: "The ID of an openDAQ-bundle run whose stagings to test (empty: stage them in this run)"
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: Integration tests
+    permissions:
+      contents: read
+      packages: write     # integration-tests.yml asks for it: bundle.yml's resolve and publish, neither pushes here
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      opendaq: ${{ inputs.opendaq || (!inputs.bundle-run && 'e65dd806cce094d7a16db713006f96c9e7db8df4' || '') }}
+      opcua-modules: >-
+        ${{ inputs.opcua-modules || (!inputs.bundle-run && '6aaa052565a3eaf75b2d2214630b66981fb92301' || '') }}
+      lt-streaming-modules: >-
+        ${{ inputs.lt-streaming-modules || (!inputs.bundle-run && 'e06da4cd8ea9665e663789c8a38d62c8fdec23b3' || '') }}
+      stagings: ${{ inputs.stagings || 'bundle' }}
+      bundle-run: ${{ inputs.bundle-run || '' }}
+    secrets:
+      bundle-token: ${{ secrets.OPENDAQ_BUNDLE_TOKEN }}
